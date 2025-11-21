@@ -5,15 +5,7 @@ import {
   MobileShift,
 } from "../types/mobileApi";
 
-/**
- * Base URL cho backend NestJS (chạy trên PC của anh).
- * - NHỚ: dùng http:// (không phải https://)
- * - Mỗi khi đổi máy / đổi mạng, IP có thể thay đổi → cần sửa lại cho đúng.
- */
 const API_BASE = "http://10.0.0.83:3000";
-
-// Export thêm cho đúng với tài liệu hướng dẫn (nếu sau này có dùng tới)
-export const API_BASE_URL = API_BASE;
 
 export async function getTodayShifts(
   staffId: string,
@@ -52,12 +44,14 @@ export async function checkInShift(
   shiftId: string,
   staffId: string
 ): Promise<CheckInOutResponse> {
+  const clientTime = new Date().toISOString(); // giờ trên thiết bị DSP
+
   const res = await fetch(
     `${API_BASE}/mobile/shifts/${encodeURIComponent(shiftId)}/check-in`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ staffId }),
+      body: JSON.stringify({ staffId, clientTime }),
     }
   );
 
@@ -72,12 +66,14 @@ export async function checkOutShift(
   shiftId: string,
   staffId: string
 ): Promise<CheckInOutResponse> {
+  const clientTime = new Date().toISOString(); // giờ trên thiết bị DSP
+
   const res = await fetch(
     `${API_BASE}/mobile/shifts/${encodeURIComponent(shiftId)}/check-out`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ staffId }),
+      body: JSON.stringify({ staffId, clientTime }),
     }
   );
 

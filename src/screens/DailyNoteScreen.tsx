@@ -1,5 +1,5 @@
 // src/screens/DailyNoteScreen.tsx
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   Alert,
   ScrollView,
@@ -17,7 +17,7 @@ import { submitDailyNote } from "../api/mobileClient";
 
 type Props = NativeStackScreenProps<RootStackParamList, "DailyNote">;
 
-/** ==== Reusable small components for consistent style ==== */
+/** ==== Small reusable components ==== */
 
 const Section = ({
   title,
@@ -123,6 +123,19 @@ const PrimaryButton = ({
   </TouchableOpacity>
 );
 
+/** ==== Helper: format ISO -> HH:MM (theo giờ máy DSP) ==== */
+function formatTimeFromIso(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    // fallback: nếu backend trả chuỗi lạ thì hiển thị luôn
+    return iso;
+  }
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 /** ==== Daily Note Screen ==== */
 
 export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
@@ -139,11 +152,20 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
     scheduleStart,
     scheduleEnd,
     outcomeText,
+    // 2 field mới nhận từ HomeScreen (ISO time của Check in/out)
+    visitStart,
+    visitEnd,
   } = route.params;
 
-  // Visit times (DSP nhập)
-  const [visitStart, setVisitStart] = useState("");
-  const [visitEnd, setVisitEnd] = useState("");
+  /** Thời gian hiển thị (HH:MM), chỉ đọc – không cho sửa tay */
+  const visitStartDisplay = useMemo(
+    () => formatTimeFromIso(visitStart),
+    [visitStart]
+  );
+  const visitEndDisplay = useMemo(
+    () => formatTimeFromIso(visitEnd),
+    [visitEnd]
+  );
 
   // Main content
   const [todayPlan, setTodayPlan] = useState("");
@@ -168,18 +190,16 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
   const [healthNotes, setHealthNotes] = useState("");
   const [incidentNotes, setIncidentNotes] = useState("");
 
-  // Signature (simple version)
+  // Signature
   const [staffName, setStaffName] = useState("");
   const [certifyText, setCertifyText] = useState(
     "I certify that the above services were delivered as documented."
   );
 
-  // Submitting state
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-    // TODO sau này: lấy staffId thật từ context/login
-    const staffId = "STAFF_DEMO";
+    const staffId = "STAFF_DEMO"; // TODO: sau này lấy từ login
 
     const payload: MobileDailyNotePayload = {
       shiftId,
@@ -198,8 +218,9 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
       scheduleEnd,
       outcomeText,
 
-      visitStart,
-      visitEnd,
+      // Gửi đúng dữ liệu giờ từ shift (ISO hoặc chuỗi backend trả)
+      visitStart: visitStart ?? undefined,
+      visitEnd: visitEnd ?? undefined,
 
       todayPlan,
       whatWeWorkedOn,
@@ -233,33 +254,24 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
 
     try {
       setIsSubmitting(true);
-
-      // Gọi API thật
       const result = await submitDailyNote(payload);
 
       console.log("DailyNote submit result:", result);
 
-      Alert.alert(
-        "Daily Note",
-        "Daily Note has been submitted to backend.",
-        [
-          {
-            text: "OK",
-            onPress: () => navigation.goBack(),
-          },
-          {
-            text: "Show JSON",
-            onPress: () => console.log("DailyNote payload:", payload),
-            style: "default",
-          },
-        ]
-      );
+      Alert.alert("Daily Note", "Daily Note has been submitted to backend.", [
+        {
+          text: "OK",
+          onPress: () => navigation.goBack(),
+        },
+        {
+          text: "Show JSON",
+          onPress: () => console.log("DailyNote payload:", payload),
+          style: "default",
+        },
+      ]);
     } catch (err: any) {
       console.error("DailyNote submit error:", err);
-      Alert.alert(
-        "Error",
-        "Failed to submit Daily Note. Please try again."
-      );
+      Alert.alert("Error", "Failed to submit Daily Note. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -335,23 +347,23 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
           <TextArea value={outcomeText || ""} editable={false} />
         </Section>
 
-        {/* Visit actual times */}
+        {/* Visit times - auto-filled, read-only */}
         <Section title="Visit actual time">
           <View style={{ flexDirection: "row", gap: 8 }}>
             <View style={{ flex: 1 }}>
               <Label>Visit Start (HH:MM)</Label>
               <Input
-                placeholder="e.g. 07:05"
-                value={visitStart}
-                onChangeText={setVisitStart}
+                value={visitStartDisplay}
+                editable={false}
+                placeholder="Auto-filled from Check in"
               />
             </View>
             <View style={{ flex: 1 }}>
               <Label>Visit End (HH:MM)</Label>
               <Input
-                placeholder="e.g. 14:58"
-                value={visitEnd}
-                onChangeText={setVisitEnd}
+                value={visitEndDisplay}
+                editable={false}
+                placeholder="Auto-filled from Check out"
               />
             </View>
           </View>

@@ -1,5 +1,5 @@
 // src/screens/HomeScreen.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -7,20 +7,32 @@ import {
   Text,
   TouchableOpacity,
   View,
-} from 'react-native';
-import { NativeStackScreenProps } from '@react-navigation/native-stack';
+} from "react-native";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
-import type { RootStackParamList } from '../../App';
-import type { MobileShift } from '../types/mobileApi';
+import type { RootStackParamList } from "../../App";
+import type { MobileShift } from "../types/mobileApi";
 import {
   getTodayShifts,
   checkInShift,
   checkOutShift,
-} from '../api/mobileClient';
+} from "../api/mobileClient";
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
+type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
-const STAFF_ID = 'STAFF_DEMO';
+const STAFF_ID = "STAFF_DEMO";
+
+/** Đổi ISO time từ backend -> HH:MM local (24h) */
+const formatTimeHM = (iso: string | undefined | null): string => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("en-US", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
 
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [shifts, setShifts] = useState<MobileShift[]>([]);
@@ -34,8 +46,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const getTodayDate = () => {
     const d = new Date();
     const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
     return `${year}-${month}-${day}`;
   };
 
@@ -48,8 +60,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       setShifts(data || []);
       setSelectedIndex(0);
     } catch (err: any) {
-      console.error('Load shifts error:', err);
-      Alert.alert('Error', 'Failed to load today shifts from server.');
+      console.error("Load shifts error:", err);
+      Alert.alert("Error", "Failed to load today shifts from server.");
     } finally {
       setLoading(false);
     }
@@ -60,70 +72,103 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   }, []);
 
   /** Label hiển thị theo status backend */
-  const getStatusLabel = (status: MobileShift['status']) => {
+  const getStatusLabel = (status: MobileShift["status"]) => {
     switch (status) {
-      case 'IN_PROGRESS':
-        return 'In progress';
-      case 'COMPLETED':
-        return 'Completed';
+      case "IN_PROGRESS":
+        return "In progress";
+      case "COMPLETED":
+        return "Completed";
       default:
-        return 'Not started';
+        return "Not started";
     }
   };
 
   /** Màu chữ status */
-  const getStatusColor = (status: MobileShift['status']) => {
+  const getStatusColor = (status: MobileShift["status"]) => {
     switch (status) {
-      case 'IN_PROGRESS':
-        return '#2563EB'; // blue
-      case 'COMPLETED':
-        return '#16A34A'; // green
+      case "IN_PROGRESS":
+        return "#2563EB"; // blue
+      case "COMPLETED":
+        return "#16A34A"; // green
       default:
-        return '#EA580C'; // orange
+        return "#EA580C"; // orange
     }
   };
 
   /** Text trên button Check in / Check out */
-  const getCheckButtonLabel = (status: MobileShift['status']) => {
-    if (status === 'IN_PROGRESS') return 'Check out';
-    if (status === 'COMPLETED') return 'Completed';
-    return 'Check in';
+  const getCheckButtonLabel = (status: MobileShift["status"]) => {
+    if (status === "IN_PROGRESS") return "Check out";
+    if (status === "COMPLETED") return "Completed";
+    return "Check in";
   };
 
-  const isCheckButtonDisabled = (status: MobileShift['status']) =>
-    status === 'COMPLETED';
+  const isCheckButtonDisabled = (status: MobileShift["status"]) =>
+    status === "COMPLETED";
 
   /** Xử lý bấm nút Check in / Check out */
   const handleCheckInOut = async () => {
     if (!selectedShift) {
-      Alert.alert('No shift', 'No shift selected.');
+      Alert.alert("No shift", "No shift selected.");
       return;
     }
 
     try {
       setChecking(true);
 
-      if (selectedShift.status === 'IN_PROGRESS') {
-        // Check OUT
+      if (selectedShift.status === "IN_PROGRESS") {
+        // ===== CHECK OUT =====
         const res = await checkOutShift(String(selectedShift.id), STAFF_ID);
-        console.log('Check-out OK for shift', selectedShift.id, res);
-        Alert.alert('Check out', 'You have checked out successfully.');
+        console.log("Check-out OK for shift", selectedShift.id, res);
+
+        const visitEndLocal = formatTimeHM(res.time);
+
+        // Cập nhật local state để UI & DailyNote dùng được ngay
+        setShifts((prev) =>
+          prev.map((s) =>
+            s.id === selectedShift.id
+              ? {
+                  ...s,
+                  status: "COMPLETED",
+                  visitEnd: visitEndLocal,
+                }
+              : s
+          )
+        );
+
+        Alert.alert("Check out", "You have checked out successfully.");
       } else {
-        // NOT_STARTED hoặc COMPLETED → cho check IN khi NOT_STARTED
-        if (selectedShift.status === 'COMPLETED') {
-          Alert.alert('Info', 'This shift is already completed.');
+        // NOT_STARTED (cho check in), COMPLETED thì chặn
+        if (selectedShift.status === "COMPLETED") {
+          Alert.alert("Info", "This shift is already completed.");
           return;
         }
+
+        // ===== CHECK IN =====
         const res = await checkInShift(String(selectedShift.id), STAFF_ID);
-        console.log('Check-in OK for shift', selectedShift.id, res);
-        Alert.alert('Check in', 'You have checked in successfully.');
+        console.log("Check-in OK for shift", selectedShift.id, res);
+
+        const visitStartLocal = formatTimeHM(res.time);
+
+        setShifts((prev) =>
+          prev.map((s) =>
+            s.id === selectedShift.id
+              ? {
+                  ...s,
+                  status: "IN_PROGRESS",
+                  visitStart: visitStartLocal,
+                }
+              : s
+          )
+        );
+
+        Alert.alert("Check in", "You have checked in successfully.");
       }
 
-      // Quan trọng: reload lại danh sách shifts để status thay đổi
+      // Sau khi update local, vẫn reload lại từ backend cho chắc
       await loadShifts();
     } catch (err: any) {
-      console.error('Check in/out error:', err);
-      Alert.alert('Error', 'Failed to perform check in/out.');
+      console.error("Check in/out error:", err);
+      Alert.alert("Error", "Failed to perform check in/out.");
     } finally {
       setChecking(false);
     }
@@ -132,11 +177,11 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   /** Mở màn Daily Note cho ca đang chọn */
   const handleOpenDailyNote = () => {
     if (!selectedShift) {
-      Alert.alert('No shift', 'No shift selected.');
+      Alert.alert("No shift", "No shift selected.");
       return;
     }
 
-    navigation.navigate('DailyNote', {
+    navigation.navigate("DailyNote", {
       shiftId: String(selectedShift.id),
       date: selectedShift.date,
       individualId: selectedShift.individualId,
@@ -149,11 +194,14 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       scheduleStart: selectedShift.scheduleStart,
       scheduleEnd: selectedShift.scheduleEnd,
       outcomeText: selectedShift.outcomeText,
+      // NEW: truyền visitStart / visitEnd cho DailyNote auto-fill
+      visitStart: selectedShift.visitStart ?? "",
+      visitEnd: selectedShift.visitEnd ?? "",
     });
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F3F4F6' }}>
+    <View style={{ flex: 1, backgroundColor: "#F3F4F6" }}>
       <ScrollView
         contentContainerStyle={{
           paddingHorizontal: 16,
@@ -165,10 +213,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         <Text
           style={{
             fontSize: 20,
-            fontWeight: '800',
-            textAlign: 'center',
+            fontWeight: "800",
+            textAlign: "center",
             marginBottom: 16,
-            color: '#111827',
+            color: "#111827",
           }}
         >
           Blue Angels Care
@@ -177,8 +225,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         <Text
           style={{
             fontSize: 26,
-            fontWeight: '800',
-            color: '#111827',
+            fontWeight: "800",
+            color: "#111827",
             marginBottom: 4,
           }}
         >
@@ -187,8 +235,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         <Text
           style={{
             fontSize: 18,
-            fontWeight: '600',
-            color: '#4B5563',
+            fontWeight: "600",
+            color: "#4B5563",
             marginBottom: 20,
           }}
         >
@@ -198,8 +246,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         <Text
           style={{
             fontSize: 20,
-            fontWeight: '800',
-            color: '#111827',
+            fontWeight: "800",
+            color: "#111827",
             marginBottom: 12,
           }}
         >
@@ -207,7 +255,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         </Text>
 
         {loading && (
-          <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+          <View style={{ paddingVertical: 40, alignItems: "center" }}>
             <ActivityIndicator size="large" color="#2563EB" />
           </View>
         )}
@@ -217,10 +265,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             style={{
               padding: 16,
               borderRadius: 16,
-              backgroundColor: '#E5E7EB',
+              backgroundColor: "#E5E7EB",
             }}
           >
-            <Text style={{ color: '#4B5563' }}>
+            <Text style={{ color: "#4B5563" }}>
               You have no scheduled shifts for today.
             </Text>
           </View>
@@ -232,8 +280,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             style={{
               borderRadius: 24,
               borderWidth: 2,
-              borderColor: '#2563EB',
-              backgroundColor: '#FFFFFF',
+              borderColor: "#2563EB",
+              backgroundColor: "#FFFFFF",
               padding: 16,
               marginBottom: 24,
             }}
@@ -241,8 +289,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             <Text
               style={{
                 fontSize: 24,
-                fontWeight: '800',
-                color: '#111827',
+                fontWeight: "800",
+                color: "#111827",
                 marginBottom: 4,
               }}
             >
@@ -252,8 +300,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             <Text
               style={{
                 fontSize: 18,
-                fontWeight: '600',
-                color: '#111827',
+                fontWeight: "600",
+                color: "#111827",
                 marginBottom: 4,
               }}
             >
@@ -263,7 +311,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             <Text
               style={{
                 fontSize: 18,
-                color: '#4B5563',
+                color: "#4B5563",
                 marginBottom: 4,
               }}
             >
@@ -273,7 +321,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             <Text
               style={{
                 fontSize: 16,
-                color: '#6B7280',
+                color: "#6B7280",
                 marginBottom: 8,
               }}
             >
@@ -283,7 +331,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             <Text
               style={{
                 fontSize: 18,
-                fontWeight: '700',
+                fontWeight: "700",
                 color: getStatusColor(selectedShift.status),
               }}
             >
@@ -299,23 +347,23 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             disabled={checking || isCheckButtonDisabled(selectedShift.status)}
             style={{
               backgroundColor: isCheckButtonDisabled(selectedShift.status)
-                ? '#9CA3AF'
-                : '#2563EB',
+                ? "#9CA3AF"
+                : "#2563EB",
               paddingVertical: 14,
               borderRadius: 999,
-              alignItems: 'center',
+              alignItems: "center",
               marginBottom: 12,
             }}
           >
             <Text
               style={{
-                color: '#FFFFFF',
+                color: "#FFFFFF",
                 fontSize: 18,
-                fontWeight: '800',
+                fontWeight: "800",
               }}
             >
               {checking
-                ? 'Processing...'
+                ? "Processing..."
                 : getCheckButtonLabel(selectedShift.status)}
             </Text>
           </TouchableOpacity>
@@ -326,19 +374,19 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           <TouchableOpacity
             onPress={handleOpenDailyNote}
             style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: "#FFFFFF",
               borderWidth: 1,
-              borderColor: '#111827',
+              borderColor: "#111827",
               paddingVertical: 14,
               borderRadius: 999,
-              alignItems: 'center',
+              alignItems: "center",
             }}
           >
             <Text
               style={{
-                color: '#111827',
+                color: "#111827",
                 fontSize: 18,
-                fontWeight: '800',
+                fontWeight: "800",
               }}
             >
               Open Daily Note
@@ -349,5 +397,6 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     </View>
   );
 };
+
 export default HomeScreen;
 export { HomeScreen };
