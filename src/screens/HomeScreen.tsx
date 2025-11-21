@@ -18,14 +18,18 @@ type ShiftStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
 type Shift = {
   id: string;
   date: string; // ngày làm dịch vụ
+
+  individualId: string;
   individualName: string;
-  service: string;
+
+  serviceCode: string;   // COMP / HCSS / PCA...
+  service: string;       // "COMP – Companion"
+
   startTime: string;
   endTime: string;
   location: string;
   status: ShiftStatus;
 
-  // Thông tin bổ sung để auto-fill Daily Note (tạm mock)
   individualDob?: string;
   individualMa?: string;
   individualAddress?: string;
@@ -37,7 +41,9 @@ const mockShifts: Shift[] = [
   {
     id: "1",
     date: "2025-11-20",
+    individualId: "IND001",
     individualName: "Donald Wilbur",
+    serviceCode: "COMP",
     service: "COMP – Companion",
     startTime: "08:00",
     endTime: "12:00",
@@ -51,7 +57,9 @@ const mockShifts: Shift[] = [
   {
     id: "2",
     date: "2025-11-20",
+    individualId: "IND002",
     individualName: "Mary Smith",
+    serviceCode: "HCSS",
     service: "HCSS – Home & Community",
     startTime: "13:00",
     endTime: "17:00",
@@ -65,7 +73,9 @@ const mockShifts: Shift[] = [
   {
     id: "3",
     date: "2025-11-20",
+    individualId: "IND003",
     individualName: "John Doe",
+    serviceCode: "PCA",
     service: "PCA – Personal Care",
     startTime: "18:00",
     endTime: "20:00",
@@ -107,15 +117,19 @@ export default function HomeScreen({ navigation }: Props) {
   const handleOpenDailyNote = () => {
     if (!selectedShift) return;
 
-    // Điều hướng sang màn Daily Note với đầy đủ dữ liệu mock
     navigation.navigate("DailyNote", {
       shiftId: selectedShift.id,
       date: selectedShift.date,
+
+      individualId: selectedShift.individualId,
       individualName: selectedShift.individualName,
       individualDob: selectedShift.individualDob,
       individualMa: selectedShift.individualMa,
       individualAddress: selectedShift.individualAddress,
+
+      serviceCode: selectedShift.serviceCode,
       serviceName: selectedShift.service,
+
       scheduleStart: selectedShift.startTime,
       scheduleEnd: selectedShift.endTime,
       outcomeText: selectedShift.outcomeText,

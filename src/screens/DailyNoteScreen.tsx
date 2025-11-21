@@ -12,6 +12,7 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
 /** ==== Navigation types ==== */
 import type { RootStackParamList } from "../../App";
+import type { MobileDailyNotePayload } from "../types/mobileApi";
 
 type Props = NativeStackScreenProps<RootStackParamList, "DailyNote">;
 
@@ -124,10 +125,12 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
   const {
     shiftId,
     date,
+    individualId,
     individualName,
     individualDob,
     individualMa,
     individualAddress,
+    serviceCode,
     serviceName,
     scheduleStart,
     scheduleEnd,
@@ -168,51 +171,75 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
   );
 
   const handleSubmit = () => {
-    // Tạm thời chỉ Alert JSON, sau này sẽ POST lên API để tạo DOC/PDF
-    const payload = {
+    // TODO sau này: lấy staffId thật từ context/login
+    const staffId = "STAFF_DEMO";
+
+    const payload: MobileDailyNotePayload = {
       shiftId,
+      staffId,
+      individualId,
+
       date,
       individualName,
       individualDob,
       individualMa,
       individualAddress,
+
+      serviceCode,
       serviceName,
       scheduleStart,
       scheduleEnd,
       outcomeText,
+
       visitStart,
       visitEnd,
+
       todayPlan,
       whatWeWorkedOn,
       opportunities,
       notes,
+
       meals: {
         breakfast: {
-          time: breakfastTime,
-          had: breakfastHad,
-          offered: breakfastOffered,
+          time: breakfastTime || undefined,
+          had: breakfastHad || undefined,
+          offered: breakfastOffered || undefined,
         },
-        lunch: { time: lunchTime, had: lunchHad, offered: lunchOffered },
-        dinner: { time: dinnerTime, had: dinnerHad, offered: dinnerOffered },
+        lunch: {
+          time: lunchTime || undefined,
+          had: lunchHad || undefined,
+          offered: lunchOffered || undefined,
+        },
+        dinner: {
+          time: dinnerTime || undefined,
+          had: dinnerHad || undefined,
+          offered: dinnerOffered || undefined,
+        },
       },
-      healthNotes,
-      incidentNotes,
+
+      healthNotes: healthNotes || undefined,
+      incidentNotes: incidentNotes || undefined,
+
       staffName,
       certifyText,
     };
 
-    Alert.alert("Daily Note (mock)", "Payload will be sent to backend later.", [
-      {
-        text: "Show JSON",
-        onPress: () => {
-          console.log("DailyNote payload:", payload);
+    Alert.alert(
+      "Daily Note (mock)",
+      "Payload will be sent to backend later.",
+      [
+        {
+          text: "Show JSON",
+          onPress: () => {
+            console.log("DailyNote payload:", payload);
+          },
         },
-      },
-      {
-        text: "OK",
-        onPress: () => navigation.goBack(),
-      },
-    ]);
+        {
+          text: "OK",
+          onPress: () => navigation.goBack(),
+        },
+      ]
+    );
   };
 
   return (

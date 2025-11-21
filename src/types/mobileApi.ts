@@ -8,7 +8,7 @@ export interface MobileUser {
   role: "DSP";
 }
 
-/** Một ca trực (shift) hiển thị trên Today’s Shifts */
+/** Trạng thái ca trực trên mobile */
 export type MobileShiftStatus =
   | "NOT_STARTED"
   | "IN_PROGRESS"
@@ -16,52 +16,49 @@ export type MobileShiftStatus =
   | "CANCELLED";
 
 export interface MobileShift {
-  id: string; // ScheduleRowID hoặc Timesheet ID
-  date: string; // YYYY-MM-DD
+  id: string;            // ScheduleRowID hoặc Timesheet ID
+  date: string;          // YYYY-MM-DD
   individualId: string;
   individualName: string;
   individualDob?: string;
   individualMa?: string;
   individualAddress?: string;
 
-  serviceCode: string; // COMP / HCSS / PCA...
-  serviceName: string; // "COMP – Companion"
-  location: string; // "Home", "Community", ...
+  serviceCode: string;   // COMP / HCSS / PCA...
+  serviceName: string;   // "COMP – Companion"
+  location: string;      // "Home", "Community", ...
   scheduleStart: string; // "08:00"
-  scheduleEnd: string; // "12:00"
+  scheduleEnd: string;   // "12:00"
 
   status: MobileShiftStatus;
-  // Giờ thực tế (nếu đã check in/out)
   visitStart?: string | null;
   visitEnd?: string | null;
 
-  outcomeText?: string; // ISP Outcome tóm tắt
+  outcomeText?: string;
 }
 
-/** Payload cho Daily Note gửi lên backend */
+/** Payload Daily Note gửi lên backend */
 export interface MobileDailyNotePayload {
   shiftId: string;
   staffId: string;
   individualId: string;
 
-  date: string; // ngày dịch vụ
+  date: string;
 
-  // auto-fill
   individualName: string;
   individualDob?: string;
   individualMa?: string;
   individualAddress?: string;
+
   serviceCode: string;
   serviceName: string;
   scheduleStart: string;
   scheduleEnd: string;
   outcomeText?: string;
 
-  // visit thực tế
   visitStart: string;
   visitEnd: string;
 
-  // nội dung trong ca
   todayPlan: string;
   whatWeWorkedOn: string;
   opportunities: string;

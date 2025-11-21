@@ -18,13 +18,18 @@ export type RootStackParamList = {
   DailyNote: {
     shiftId: string;
     date: string;
+
+    individualId: string;
     individualName: string;
     individualDob?: string;
     individualMa?: string;
     individualAddress?: string;
+
+    serviceCode: string;
     serviceName: string;
+
     scheduleStart: string; // e.g. "08:00"
-    scheduleEnd: string; // e.g. "12:00"
+    scheduleEnd: string;   // e.g. "12:00"
     outcomeText?: string;
   };
 };
