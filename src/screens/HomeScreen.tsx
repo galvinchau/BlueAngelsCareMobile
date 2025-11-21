@@ -1,3 +1,4 @@
+// src/screens/HomeScreen.tsx
 import React, { useState } from "react";
 import {
   Alert,
@@ -22,8 +23,8 @@ type Shift = {
   individualId: string;
   individualName: string;
 
-  serviceCode: string;   // COMP / HCSS / PCA...
-  service: string;       // "COMP – Companion"
+  serviceCode: string; // COMP / HCSS / PCA...
+  service: string; // "COMP – Companion"
 
   startTime: string;
   endTime: string;
@@ -34,7 +35,19 @@ type Shift = {
   individualMa?: string;
   individualAddress?: string;
   outcomeText?: string;
+
+  // giờ thực tế (local only – chưa gửi backend)
+  visitStart?: string;
+  visitEnd?: string;
 };
+
+// Helper: lấy giờ hiện tại theo format "HH:MM" 24h
+function getCurrentTimeHHMM(): string {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
 
 // Tạm thời mock dữ liệu ca trực trong ngày
 const mockShifts: Shift[] = [
@@ -48,7 +61,7 @@ const mockShifts: Shift[] = [
     startTime: "08:00",
     endTime: "12:00",
     location: "Home – Altoona, PA",
-    status: "IN_PROGRESS",
+    status: "NOT_STARTED",
     individualDob: "01/15/1985",
     individualMa: "MA123456",
     individualAddress: "123 Main St, Altoona, PA 16602",
@@ -85,32 +98,68 @@ const mockShifts: Shift[] = [
     individualMa: "MA999888",
     individualAddress: "789 Oak St, Altoona, PA 16602",
     outcomeText: "Support with evening personal care routine.",
+    visitStart: "18:05",
+    visitEnd: "19:55",
   },
 ];
 
 export default function HomeScreen({ navigation }: Props) {
+  // Shifts state (local) – sau này sẽ thay bằng data từ API
+  const [shifts, setShifts] = useState<Shift[]>(mockShifts);
+
   const [selectedId, setSelectedId] = useState<string | null>(
     mockShifts[0]?.id ?? null
   );
 
   const selectedShift =
-    mockShifts.find((shift) => shift.id === selectedId) ?? null;
+    shifts.find((shift) => shift.id === selectedId) ?? null;
 
   const handleCheckInOut = () => {
     if (!selectedShift) return;
 
+    if (selectedShift.status === "COMPLETED") {
+      Alert.alert("Info", "This shift is already completed.");
+      return;
+    }
+
+    const currentTime = getCurrentTimeHHMM();
+
     if (selectedShift.status === "NOT_STARTED") {
+      // Check in: set visitStart + đổi trạng thái sang IN_PROGRESS
+      setShifts((prev) =>
+        prev.map((shift) =>
+          shift.id === selectedShift.id
+            ? {
+                ...shift,
+                status: "IN_PROGRESS",
+                visitStart: currentTime,
+              }
+            : shift
+        )
+      );
+
       Alert.alert(
         "Check in",
-        `You checked in to ${selectedShift.individualName}.`
+        `You checked in to ${selectedShift.individualName} at ${currentTime}.`
       );
     } else if (selectedShift.status === "IN_PROGRESS") {
+      // Check out: set visitEnd + đổi trạng thái sang COMPLETED
+      setShifts((prev) =>
+        prev.map((shift) =>
+          shift.id === selectedShift.id
+            ? {
+                ...shift,
+                status: "COMPLETED",
+                visitEnd: currentTime,
+              }
+            : shift
+        )
+      );
+
       Alert.alert(
         "Check out",
-        `You checked out from ${selectedShift.individualName}.`
+        `You checked out from ${selectedShift.individualName} at ${currentTime}.`
       );
-    } else {
-      Alert.alert("Info", "This shift is already completed.");
     }
   };
 
@@ -161,10 +210,27 @@ export default function HomeScreen({ navigation }: Props) {
           {item.startTime} – {item.endTime}
         </Text>
         <Text style={styles.shiftLocation}>{item.location}</Text>
+
+        {(item.visitStart || item.visitEnd) && (
+          <Text style={styles.actualTime}>
+            Actual: {item.visitStart ?? "--:--"} – {item.visitEnd ?? "--:--"}
+          </Text>
+        )}
+
         <Text style={[styles.status, statusStyle]}>{statusLabel}</Text>
       </TouchableOpacity>
     );
   };
+
+  const primaryButtonLabel =
+    !selectedShift || selectedShift.status === "NOT_STARTED"
+      ? "Check in"
+      : selectedShift.status === "IN_PROGRESS"
+      ? "Check out"
+      : "Completed";
+
+  const primaryButtonDisabled =
+    !selectedShift || selectedShift.status === "COMPLETED";
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -176,7 +242,7 @@ export default function HomeScreen({ navigation }: Props) {
         {/* Danh sách ca trực trong ngày */}
         <Text style={styles.sectionTitle}>Today&apos;s Shifts</Text>
         <FlatList
-          data={mockShifts}
+          data={shifts}
           horizontal
           keyExtractor={(item) => item.id}
           showsHorizontalScrollIndicator={false}
@@ -188,14 +254,14 @@ export default function HomeScreen({ navigation }: Props) {
         {selectedShift && (
           <View style={styles.actions}>
             <TouchableOpacity
-              style={styles.primaryButton}
+              style={[
+                styles.primaryButton,
+                primaryButtonDisabled && styles.primaryButtonDisabled,
+              ]}
               onPress={handleCheckInOut}
+              disabled={primaryButtonDisabled}
             >
-              <Text style={styles.primaryButtonText}>
-                {selectedShift.status === "IN_PROGRESS"
-                  ? "Check out"
-                  : "Check in"}
-              </Text>
+              <Text style={styles.primaryButtonText}>{primaryButtonLabel}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -269,6 +335,11 @@ const styles = StyleSheet.create({
     color: "#9ca3af",
     marginTop: 4,
   },
+  actualTime: {
+    fontSize: 12,
+    color: "#4b5563",
+    marginTop: 4,
+  },
   status: {
     marginTop: 8,
     fontSize: 12,
@@ -292,6 +363,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: "center",
     marginBottom: 12,
+  },
+  primaryButtonDisabled: {
+    backgroundColor: "#9ca3af",
   },
   primaryButtonText: {
     color: "#ffffff",

@@ -13,6 +13,7 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 /** ==== Navigation types ==== */
 import type { RootStackParamList } from "../../App";
 import type { MobileDailyNotePayload } from "../types/mobileApi";
+import { submitDailyNote } from "../api/mobileClient";
 
 type Props = NativeStackScreenProps<RootStackParamList, "DailyNote">;
 
@@ -99,14 +100,17 @@ const TextArea = (props: React.ComponentProps<typeof TextInput>) => (
 const PrimaryButton = ({
   title,
   onPress,
+  disabled,
 }: {
   title: string;
   onPress: () => void;
+  disabled?: boolean;
 }) => (
   <TouchableOpacity
     onPress={onPress}
+    disabled={disabled}
     style={{
-      backgroundColor: "#0284C7",
+      backgroundColor: disabled ? "#9CA3AF" : "#0284C7",
       paddingVertical: 12,
       borderRadius: 999,
       alignItems: "center",
@@ -170,7 +174,10 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
     "I certify that the above services were delivered as documented."
   );
 
-  const handleSubmit = () => {
+  // Submitting state
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
     // TODO sau này: lấy staffId thật từ context/login
     const staffId = "STAFF_DEMO";
 
@@ -224,22 +231,38 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
       certifyText,
     };
 
-    Alert.alert(
-      "Daily Note (mock)",
-      "Payload will be sent to backend later.",
-      [
-        {
-          text: "Show JSON",
-          onPress: () => {
-            console.log("DailyNote payload:", payload);
+    try {
+      setIsSubmitting(true);
+
+      // Gọi API thật
+      const result = await submitDailyNote(payload);
+
+      console.log("DailyNote submit result:", result);
+
+      Alert.alert(
+        "Daily Note",
+        "Daily Note has been submitted to backend.",
+        [
+          {
+            text: "OK",
+            onPress: () => navigation.goBack(),
           },
-        },
-        {
-          text: "OK",
-          onPress: () => navigation.goBack(),
-        },
-      ]
-    );
+          {
+            text: "Show JSON",
+            onPress: () => console.log("DailyNote payload:", payload),
+            style: "default",
+          },
+        ]
+      );
+    } catch (err: any) {
+      console.error("DailyNote submit error:", err);
+      Alert.alert(
+        "Error",
+        "Failed to submit Daily Note. Please try again."
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -482,8 +505,9 @@ export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
         </Section>
 
         <PrimaryButton
-          title="Submit Daily Note (mock)"
+          title={isSubmitting ? "Submitting..." : "Submit Daily Note"}
           onPress={handleSubmit}
+          disabled={isSubmitting}
         />
       </ScrollView>
     </View>
