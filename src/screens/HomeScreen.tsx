@@ -1,450 +1,353 @@
-import React, { useEffect, useState } from "react";
+// src/screens/HomeScreen.tsx
+import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
-  FlatList,
-  SafeAreaView,
-  StyleSheet,
+  ScrollView,
   Text,
   TouchableOpacity,
   View,
-} from "react-native";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { RootStackParamList } from "../../App";
+} from 'react-native';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
-type Props = NativeStackScreenProps<RootStackParamList, "Home">;
+import type { RootStackParamList } from '../../App';
+import type { MobileShift } from '../types/mobileApi';
+import {
+  getTodayShifts,
+  checkInShift,
+  checkOutShift,
+} from '../api/mobileClient';
 
-/** ============================
- *  Types
- *  ============================ */
+type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
-type ShiftStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
+const STAFF_ID = 'STAFF_DEMO';
 
-type TodayShift = {
-  id: string;
-  date: string;
+const HomeScreen: React.FC<Props> = ({ navigation }) => {
+  const [shifts, setShifts] = useState<MobileShift[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [checking, setChecking] = useState(false);
 
-  individualId: string;
-  individualName: string;
-  individualDob?: string;
-  individualMa?: string;
-  individualAddress?: string;
+  const selectedShift = shifts[selectedIndex];
 
-  serviceCode: string;
-  serviceName: string;
+  /** Tính ngày hôm nay theo định dạng YYYY-MM-DD */
+  const getTodayDate = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
-  location: string;
-
-  scheduleStart: string; // "08:00"
-  scheduleEnd: string; // "12:00"
-
-  visitStart?: string | null;
-  visitEnd?: string | null;
-
-  status: ShiftStatus;
-  outcomeText?: string;
-};
-
-type TodayShiftsApiResponse = {
-  shifts: Array<{
-    id: string;
-    date: string;
-
-    individualId: string;
-    individualName: string;
-    individualDob?: string;
-    individualMA?: string;
-    individualAddress?: string;
-
-    serviceCode: string;
-    serviceName: string;
-
-    location?: string;
-
-    scheduleStart: string;
-    scheduleEnd: string;
-
-    visitStart?: string | null;
-    visitEnd?: string | null;
-
-    status: ShiftStatus;
-    outcomeText?: string;
-  }>;
-};
-
-/** ============================
- *  Config (tạm thời)
- *  ============================ */
-
-// ⚠ IP của máy đang chạy NestJS (bac-api)
-// Ở nhà hiện tại: 192.168.0.141
-// Sau này nếu chạy ở máy khác chỉ cần sửa IP này.
-const API_BASE = "http://192.168.0.141:3000";
-
-export default function HomeScreen({ navigation }: Props) {
-  const [shifts, setShifts] = useState<TodayShift[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-
-  /** ============================
-   *  Load Today’s Shifts from API
-   *  ============================ */
-  const loadTodayShifts = async () => {
+  /** Load today's shifts từ API */
+  const loadShifts = async () => {
     try {
       setLoading(true);
-      setError(null);
-
-      const staffId = "STAFF_DEMO"; // TODO: sau này lấy từ login
-
-      // Lấy ngày hôm nay theo format YYYY-MM-DD
-      const today = new Date();
-      const yyyy = today.getFullYear();
-      const mm = String(today.getMonth() + 1).padStart(2, "0");
-      const dd = String(today.getDate()).padStart(2, "0");
-      const date = `${yyyy}-${mm}-${dd}`;
-
-      const url = `${API_BASE}/mobile/shifts/today?staffId=${encodeURIComponent(
-        staffId
-      )}&date=${date}`;
-
-      console.log("[Home] Fetching today's shifts:", url);
-
-      const res = await fetch(url);
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        console.error(
-          "[Home] Error response",
-          res.status,
-          res.statusText,
-          text
-        );
-        throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      }
-
-      const data = (await res.json()) as TodayShiftsApiResponse;
-
-      const mapped: TodayShift[] = (data.shifts || []).map((s) => ({
-        id: s.id,
-        date: s.date,
-
-        individualId: s.individualId,
-        individualName: s.individualName,
-        individualDob: s.individualDob,
-        individualMa: s.individualMA,
-        individualAddress: s.individualAddress,
-
-        serviceCode: s.serviceCode,
-        serviceName: s.serviceName,
-
-        location: s.location || "Home / Community",
-
-        scheduleStart: s.scheduleStart,
-        scheduleEnd: s.scheduleEnd,
-
-        visitStart: s.visitStart,
-        visitEnd: s.visitEnd,
-
-        status: s.status,
-        outcomeText: s.outcomeText,
-      }));
-
-      setShifts(mapped);
-
-      // Nếu chưa có shift được chọn thì chọn cái đầu tiên
-      if (!selectedId && mapped.length > 0) {
-        setSelectedId(mapped[0].id);
-      }
-
-      console.log("[Home] Loaded shifts:", mapped.length);
+      const today = getTodayDate();
+      const data = await getTodayShifts(STAFF_ID, today);
+      setShifts(data || []);
+      setSelectedIndex(0);
     } catch (err: any) {
-      console.error("[Home] Failed to load shifts:", err);
-      setError(err?.message || "Failed to load today's shifts.");
+      console.error('Load shifts error:', err);
+      Alert.alert('Error', 'Failed to load today shifts from server.');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    void loadTodayShifts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadShifts();
   }, []);
 
-  const selectedShift =
-    shifts.find((shift) => shift.id === selectedId) ?? null;
-
-  /** ============================
-   *  Actions
-   *  ============================ */
-
-  const handleCheckInOut = () => {
-    if (!selectedShift) return;
-
-    if (selectedShift.status === "NOT_STARTED") {
-      Alert.alert(
-        "Check in",
-        `You checked in to ${selectedShift.individualName}. (frontend only)`
-      );
-
-      // Tạm thời chỉ cập nhật UI, chưa gọi API check-in
-      setShifts((prev) =>
-        prev.map((s) =>
-          s.id === selectedShift.id ? { ...s, status: "IN_PROGRESS" } : s
-        )
-      );
-    } else if (selectedShift.status === "IN_PROGRESS") {
-      Alert.alert(
-        "Check out",
-        `You checked out from ${selectedShift.individualName}. (frontend only)`
-      );
-
-      setShifts((prev) =>
-        prev.map((s) =>
-          s.id === selectedShift.id ? { ...s, status: "COMPLETED" } : s
-        )
-      );
-    } else {
-      Alert.alert("Info", "This shift is already completed.");
+  /** Label hiển thị theo status backend */
+  const getStatusLabel = (status: MobileShift['status']) => {
+    switch (status) {
+      case 'IN_PROGRESS':
+        return 'In progress';
+      case 'COMPLETED':
+        return 'Completed';
+      default:
+        return 'Not started';
     }
   };
 
+  /** Màu chữ status */
+  const getStatusColor = (status: MobileShift['status']) => {
+    switch (status) {
+      case 'IN_PROGRESS':
+        return '#2563EB'; // blue
+      case 'COMPLETED':
+        return '#16A34A'; // green
+      default:
+        return '#EA580C'; // orange
+    }
+  };
+
+  /** Text trên button Check in / Check out */
+  const getCheckButtonLabel = (status: MobileShift['status']) => {
+    if (status === 'IN_PROGRESS') return 'Check out';
+    if (status === 'COMPLETED') return 'Completed';
+    return 'Check in';
+  };
+
+  const isCheckButtonDisabled = (status: MobileShift['status']) =>
+    status === 'COMPLETED';
+
+  /** Xử lý bấm nút Check in / Check out */
+  const handleCheckInOut = async () => {
+    if (!selectedShift) {
+      Alert.alert('No shift', 'No shift selected.');
+      return;
+    }
+
+    try {
+      setChecking(true);
+
+      if (selectedShift.status === 'IN_PROGRESS') {
+        // Check OUT
+        const res = await checkOutShift(String(selectedShift.id), STAFF_ID);
+        console.log('Check-out OK for shift', selectedShift.id, res);
+        Alert.alert('Check out', 'You have checked out successfully.');
+      } else {
+        // NOT_STARTED hoặc COMPLETED → cho check IN khi NOT_STARTED
+        if (selectedShift.status === 'COMPLETED') {
+          Alert.alert('Info', 'This shift is already completed.');
+          return;
+        }
+        const res = await checkInShift(String(selectedShift.id), STAFF_ID);
+        console.log('Check-in OK for shift', selectedShift.id, res);
+        Alert.alert('Check in', 'You have checked in successfully.');
+      }
+
+      // Quan trọng: reload lại danh sách shifts để status thay đổi
+      await loadShifts();
+    } catch (err: any) {
+      console.error('Check in/out error:', err);
+      Alert.alert('Error', 'Failed to perform check in/out.');
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  /** Mở màn Daily Note cho ca đang chọn */
   const handleOpenDailyNote = () => {
-    if (!selectedShift) return;
+    if (!selectedShift) {
+      Alert.alert('No shift', 'No shift selected.');
+      return;
+    }
 
-    navigation.navigate("DailyNote", {
-      shiftId: selectedShift.id,
+    navigation.navigate('DailyNote', {
+      shiftId: String(selectedShift.id),
       date: selectedShift.date,
-
       individualId: selectedShift.individualId,
       individualName: selectedShift.individualName,
       individualDob: selectedShift.individualDob,
       individualMa: selectedShift.individualMa,
       individualAddress: selectedShift.individualAddress,
-
       serviceCode: selectedShift.serviceCode,
       serviceName: selectedShift.serviceName,
-
       scheduleStart: selectedShift.scheduleStart,
       scheduleEnd: selectedShift.scheduleEnd,
-
       outcomeText: selectedShift.outcomeText,
     });
   };
 
-  /** ============================
-   *  Render shift card
-   *  ============================ */
-
-  const renderShift = ({ item }: { item: TodayShift }) => {
-    const isSelected = item.id === selectedId;
-
-    let statusStyle = styles.statusNotStarted;
-    let statusLabel = "Not started";
-
-    if (item.status === "IN_PROGRESS") {
-      statusStyle = styles.statusInProgress;
-      statusLabel = "In progress";
-    } else if (item.status === "COMPLETED") {
-      statusStyle = styles.statusCompleted;
-      statusLabel = "Completed";
-    }
-
-    return (
-      <TouchableOpacity
-        style={[styles.shiftCard, isSelected && styles.shiftCardSelected]}
-        onPress={() => setSelectedId(item.id)}
-      >
-        <Text style={styles.shiftIndividual}>{item.individualName}</Text>
-        <Text style={styles.shiftText}>{item.serviceName}</Text>
-        <Text style={styles.shiftText}>
-          {item.scheduleStart} – {item.scheduleEnd}
-        </Text>
-        <Text style={styles.shiftLocation}>{item.location}</Text>
-        <Text style={[styles.status, statusStyle]}>{statusLabel}</Text>
-      </TouchableOpacity>
-    );
-  };
-
-  /** ============================
-   *  Render
-   *  ============================ */
-
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
-        {/* Header nhỏ phía trên */}
-        <Text style={styles.appTitle}>Blue Angels Care Mobile</Text>
-        <Text style={styles.subtitle}>Welcome, DSP!</Text>
+    <View style={{ flex: 1, backgroundColor: '#F3F4F6' }}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingTop: 16,
+          paddingBottom: 24,
+        }}
+      >
+        {/* Header */}
+        <Text
+          style={{
+            fontSize: 20,
+            fontWeight: '800',
+            textAlign: 'center',
+            marginBottom: 16,
+            color: '#111827',
+          }}
+        >
+          Blue Angels Care
+        </Text>
 
-        {/* Danh sách ca trực trong ngày */}
-        <Text style={styles.sectionTitle}>Today&apos;s Shifts</Text>
+        <Text
+          style={{
+            fontSize: 26,
+            fontWeight: '800',
+            color: '#111827',
+            marginBottom: 4,
+          }}
+        >
+          Blue Angels Care Mobile
+        </Text>
+        <Text
+          style={{
+            fontSize: 18,
+            fontWeight: '600',
+            color: '#4B5563',
+            marginBottom: 20,
+          }}
+        >
+          Welcome, DSP!
+        </Text>
+
+        <Text
+          style={{
+            fontSize: 20,
+            fontWeight: '800',
+            color: '#111827',
+            marginBottom: 12,
+          }}
+        >
+          Today&apos;s Shifts
+        </Text>
 
         {loading && (
-          <Text style={styles.infoText}>Loading today&apos;s shifts...</Text>
-        )}
-
-        {!loading && error && (
-          <Text style={styles.errorText}>{error}</Text>
-        )}
-
-        {!loading && !error && shifts.length === 0 && (
-          <Text style={styles.infoText}>
-            No shifts scheduled for today.
-          </Text>
-        )}
-
-        <FlatList
-          data={shifts}
-          horizontal
-          keyExtractor={(item) => item.id}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.shiftList}
-          renderItem={renderShift}
-        />
-
-        {/* Action cho ca đang chọn */}
-        {selectedShift && (
-          <View style={styles.actions}>
-            <TouchableOpacity
-              style={styles.primaryButton}
-              onPress={handleCheckInOut}
-            >
-              <Text style={styles.primaryButtonText}>
-                {selectedShift.status === "IN_PROGRESS"
-                  ? "Check out"
-                  : selectedShift.status === "COMPLETED"
-                  ? "Completed"
-                  : "Check in"}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.secondaryButton}
-              onPress={handleOpenDailyNote}
-            >
-              <Text style={styles.secondaryButtonText}>
-                Open Daily Note
-              </Text>
-            </TouchableOpacity>
+          <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+            <ActivityIndicator size="large" color="#2563EB" />
           </View>
         )}
-      </View>
-    </SafeAreaView>
+
+        {!loading && shifts.length === 0 && (
+          <View
+            style={{
+              padding: 16,
+              borderRadius: 16,
+              backgroundColor: '#E5E7EB',
+            }}
+          >
+            <Text style={{ color: '#4B5563' }}>
+              You have no scheduled shifts for today.
+            </Text>
+          </View>
+        )}
+
+        {!loading && shifts.length > 0 && selectedShift && (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={{
+              borderRadius: 24,
+              borderWidth: 2,
+              borderColor: '#2563EB',
+              backgroundColor: '#FFFFFF',
+              padding: 16,
+              marginBottom: 24,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 24,
+                fontWeight: '800',
+                color: '#111827',
+                marginBottom: 4,
+              }}
+            >
+              {selectedShift.individualName}
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: '600',
+                color: '#111827',
+                marginBottom: 4,
+              }}
+            >
+              {selectedShift.serviceCode} – {selectedShift.serviceName}
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 18,
+                color: '#4B5563',
+                marginBottom: 4,
+              }}
+            >
+              {selectedShift.scheduleStart} – {selectedShift.scheduleEnd}
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 16,
+                color: '#6B7280',
+                marginBottom: 8,
+              }}
+            >
+              {selectedShift.location}
+            </Text>
+
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: '700',
+                color: getStatusColor(selectedShift.status),
+              }}
+            >
+              {getStatusLabel(selectedShift.status)}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Check in / Check out button */}
+        {shifts.length > 0 && selectedShift && (
+          <TouchableOpacity
+            onPress={handleCheckInOut}
+            disabled={checking || isCheckButtonDisabled(selectedShift.status)}
+            style={{
+              backgroundColor: isCheckButtonDisabled(selectedShift.status)
+                ? '#9CA3AF'
+                : '#2563EB',
+              paddingVertical: 14,
+              borderRadius: 999,
+              alignItems: 'center',
+              marginBottom: 12,
+            }}
+          >
+            <Text
+              style={{
+                color: '#FFFFFF',
+                fontSize: 18,
+                fontWeight: '800',
+              }}
+            >
+              {checking
+                ? 'Processing...'
+                : getCheckButtonLabel(selectedShift.status)}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Open Daily Note */}
+        {shifts.length > 0 && selectedShift && (
+          <TouchableOpacity
+            onPress={handleOpenDailyNote}
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderWidth: 1,
+              borderColor: '#111827',
+              paddingVertical: 14,
+              borderRadius: 999,
+              alignItems: 'center',
+            }}
+          >
+            <Text
+              style={{
+                color: '#111827',
+                fontSize: 18,
+                fontWeight: '800',
+              }}
+            >
+              Open Daily Note
+            </Text>
+          </TouchableOpacity>
+        )}
+      </ScrollView>
+    </View>
   );
-}
-
-/** ============================
- *  Styles
- *  ============================ */
-
-const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
-    backgroundColor: "#f2f4f7",
-  },
-  container: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-  },
-  appTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: "#6b7280",
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 8,
-  },
-  infoText: {
-    fontSize: 14,
-    color: "#6b7280",
-    marginBottom: 8,
-  },
-  errorText: {
-    fontSize: 14,
-    color: "#b91c1c",
-    marginBottom: 8,
-  },
-  shiftList: {
-    paddingVertical: 8,
-  },
-  shiftCard: {
-    width: 230,
-    backgroundColor: "#ffffff",
-    borderRadius: 16,
-    padding: 16,
-    marginRight: 12,
-    shadowColor: "#000",
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  shiftCardSelected: {
-    borderWidth: 2,
-    borderColor: "#2563eb",
-  },
-  shiftIndividual: {
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: 4,
-  },
-  shiftText: {
-    fontSize: 14,
-    color: "#4b5563",
-  },
-  shiftLocation: {
-    fontSize: 12,
-    color: "#9ca3af",
-    marginTop: 4,
-  },
-  status: {
-    marginTop: 8,
-    fontSize: 12,
-    fontWeight: "600",
-  },
-  statusNotStarted: {
-    color: "#f97316",
-  },
-  statusInProgress: {
-    color: "#2563eb",
-  },
-  statusCompleted: {
-    color: "#16a34a",
-  },
-  actions: {
-    marginTop: 24,
-  },
-  primaryButton: {
-    backgroundColor: "#2563eb",
-    borderRadius: 999,
-    paddingVertical: 14,
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  primaryButtonText: {
-    color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  secondaryButton: {
-    backgroundColor: "#ffffff",
-    borderRadius: 999,
-    paddingVertical: 14,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-  },
-  secondaryButtonText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#111827",
-  },
-});
+};
+export default HomeScreen;
+export { HomeScreen };

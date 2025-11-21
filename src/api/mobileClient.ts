@@ -1,49 +1,89 @@
 // src/api/mobileClient.ts
-// Real HTTP client for Blue Angels Care Mobile -> NestJS API
-
-import type { MobileDailyNotePayload } from "../types/mobileApi";
-
-// ⚠ IMPORTANT:
-// - Dùng IP của máy đang chạy NestJS (xem trong Expo: exp://<IP>:8081)
-// - Hiện tại ở nhà: 192.168.0.141
-// - Sau này sang máy cơ quan, chỉ cần sửa lại IP ở đây.
-const API_BASE = "http://192.168.0.141:3000";
-
-export interface SubmitDailyNoteResponse {
-  status: string;
-  id: string;
-}
+import {
+  CheckInOutResponse,
+  MobileDailyNotePayload,
+  MobileShift,
+} from "../types/mobileApi";
 
 /**
- * Call backend: POST /mobile/daily-notes
- * Body: MobileDailyNotePayload
+ * Base URL cho backend NestJS (chạy trên PC của anh).
+ * - NHỚ: dùng http:// (không phải https://)
+ * - Mỗi khi đổi máy / đổi mạng, IP có thể thay đổi → cần sửa lại cho đúng.
  */
+const API_BASE = "http://192.168.0.141:3000";
+
+// Export thêm cho đúng với tài liệu hướng dẫn (nếu sau này có dùng tới)
+export const API_BASE_URL = API_BASE;
+
+export async function getTodayShifts(
+  staffId: string,
+  date: string
+): Promise<MobileShift[]> {
+  const url = `${API_BASE}/mobile/shifts/today?staffId=${encodeURIComponent(
+    staffId
+  )}&date=${encodeURIComponent(date)}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error("Failed to load shifts");
+  }
+
+  const data = await res.json();
+  return data.shifts ?? [];
+}
+
 export async function submitDailyNote(
   payload: MobileDailyNotePayload
-): Promise<SubmitDailyNoteResponse> {
-  const url = `${API_BASE}/mobile/daily-notes`;
-  console.log("[MobileAPI] submitDailyNote ->", url);
-
-  const res = await fetch(url, {
+): Promise<{ status: string; id: string }> {
+  const res = await fetch(`${API_BASE}/mobile/daily-notes`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    console.error(
-      "[MobileAPI] submitDailyNote HTTP error",
-      res.status,
-      res.statusText,
-      text
-    );
-    throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    throw new Error("Failed to submit daily note");
   }
 
-  const data = (await res.json()) as SubmitDailyNoteResponse;
-  console.log("[MobileAPI] submitDailyNote response:", data);
-  return data;
+  return res.json();
+}
+
+export async function checkInShift(
+  shiftId: string,
+  staffId: string
+): Promise<CheckInOutResponse> {
+  const res = await fetch(
+    `${API_BASE}/mobile/shifts/${encodeURIComponent(shiftId)}/check-in`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ staffId }),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error("Failed to check in");
+  }
+
+  return res.json();
+}
+
+export async function checkOutShift(
+  shiftId: string,
+  staffId: string
+): Promise<CheckInOutResponse> {
+  const res = await fetch(
+    `${API_BASE}/mobile/shifts/${encodeURIComponent(shiftId)}/check-out`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ staffId }),
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error("Failed to check out");
+  }
+
+  return res.json();
 }
