@@ -1,5 +1,4 @@
-// src/screens/HomeScreen.tsx
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -14,152 +13,198 @@ import type { RootStackParamList } from "../../App";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
+/** ============================
+ *  Types
+ *  ============================ */
+
 type ShiftStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
 
-type Shift = {
+type TodayShift = {
   id: string;
-  date: string; // ngày làm dịch vụ
+  date: string;
 
   individualId: string;
   individualName: string;
-
-  serviceCode: string; // COMP / HCSS / PCA...
-  service: string; // "COMP – Companion"
-
-  startTime: string;
-  endTime: string;
-  location: string;
-  status: ShiftStatus;
-
   individualDob?: string;
   individualMa?: string;
   individualAddress?: string;
-  outcomeText?: string;
 
-  // giờ thực tế (local only – chưa gửi backend)
-  visitStart?: string;
-  visitEnd?: string;
+  serviceCode: string;
+  serviceName: string;
+
+  location: string;
+
+  scheduleStart: string; // "08:00"
+  scheduleEnd: string; // "12:00"
+
+  visitStart?: string | null;
+  visitEnd?: string | null;
+
+  status: ShiftStatus;
+  outcomeText?: string;
 };
 
-// Helper: lấy giờ hiện tại theo format "HH:MM" 24h
-function getCurrentTimeHHMM(): string {
-  const now = new Date();
-  const hh = String(now.getHours()).padStart(2, "0");
-  const mm = String(now.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
+type TodayShiftsApiResponse = {
+  shifts: Array<{
+    id: string;
+    date: string;
 
-// Tạm thời mock dữ liệu ca trực trong ngày
-const mockShifts: Shift[] = [
-  {
-    id: "1",
-    date: "2025-11-20",
-    individualId: "IND001",
-    individualName: "Donald Wilbur",
-    serviceCode: "COMP",
-    service: "COMP – Companion",
-    startTime: "08:00",
-    endTime: "12:00",
-    location: "Home – Altoona, PA",
-    status: "NOT_STARTED",
-    individualDob: "01/15/1985",
-    individualMa: "MA123456",
-    individualAddress: "123 Main St, Altoona, PA 16602",
-    outcomeText: "Increase independence with daily living skills at home.",
-  },
-  {
-    id: "2",
-    date: "2025-11-20",
-    individualId: "IND002",
-    individualName: "Mary Smith",
-    serviceCode: "HCSS",
-    service: "HCSS – Home & Community",
-    startTime: "13:00",
-    endTime: "17:00",
-    location: "Community – Altoona, PA",
-    status: "NOT_STARTED",
-    individualDob: "03/20/1990",
-    individualMa: "MA654321",
-    individualAddress: "456 Park Ave, Altoona, PA 16602",
-    outcomeText: "Practice social skills in community settings.",
-  },
-  {
-    id: "3",
-    date: "2025-11-20",
-    individualId: "IND003",
-    individualName: "John Doe",
-    serviceCode: "PCA",
-    service: "PCA – Personal Care",
-    startTime: "18:00",
-    endTime: "20:00",
-    location: "Home – Altoona, PA",
-    status: "COMPLETED",
-    individualDob: "07/04/1978",
-    individualMa: "MA999888",
-    individualAddress: "789 Oak St, Altoona, PA 16602",
-    outcomeText: "Support with evening personal care routine.",
-    visitStart: "18:05",
-    visitEnd: "19:55",
-  },
-];
+    individualId: string;
+    individualName: string;
+    individualDob?: string;
+    individualMA?: string;
+    individualAddress?: string;
+
+    serviceCode: string;
+    serviceName: string;
+
+    location?: string;
+
+    scheduleStart: string;
+    scheduleEnd: string;
+
+    visitStart?: string | null;
+    visitEnd?: string | null;
+
+    status: ShiftStatus;
+    outcomeText?: string;
+  }>;
+};
+
+/** ============================
+ *  Config (tạm thời)
+ *  ============================ */
+
+// ⚠ IP của máy đang chạy NestJS (bac-api)
+// Ở nhà hiện tại: 192.168.0.141
+// Sau này nếu chạy ở máy khác chỉ cần sửa IP này.
+const API_BASE = "http://192.168.0.141:3000";
 
 export default function HomeScreen({ navigation }: Props) {
-  // Shifts state (local) – sau này sẽ thay bằng data từ API
-  const [shifts, setShifts] = useState<Shift[]>(mockShifts);
+  const [shifts, setShifts] = useState<TodayShift[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const [selectedId, setSelectedId] = useState<string | null>(
-    mockShifts[0]?.id ?? null
-  );
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /** ============================
+   *  Load Today’s Shifts from API
+   *  ============================ */
+  const loadTodayShifts = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const staffId = "STAFF_DEMO"; // TODO: sau này lấy từ login
+
+      // Lấy ngày hôm nay theo format YYYY-MM-DD
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, "0");
+      const dd = String(today.getDate()).padStart(2, "0");
+      const date = `${yyyy}-${mm}-${dd}`;
+
+      const url = `${API_BASE}/mobile/shifts/today?staffId=${encodeURIComponent(
+        staffId
+      )}&date=${date}`;
+
+      console.log("[Home] Fetching today's shifts:", url);
+
+      const res = await fetch(url);
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        console.error(
+          "[Home] Error response",
+          res.status,
+          res.statusText,
+          text
+        );
+        throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      }
+
+      const data = (await res.json()) as TodayShiftsApiResponse;
+
+      const mapped: TodayShift[] = (data.shifts || []).map((s) => ({
+        id: s.id,
+        date: s.date,
+
+        individualId: s.individualId,
+        individualName: s.individualName,
+        individualDob: s.individualDob,
+        individualMa: s.individualMA,
+        individualAddress: s.individualAddress,
+
+        serviceCode: s.serviceCode,
+        serviceName: s.serviceName,
+
+        location: s.location || "Home / Community",
+
+        scheduleStart: s.scheduleStart,
+        scheduleEnd: s.scheduleEnd,
+
+        visitStart: s.visitStart,
+        visitEnd: s.visitEnd,
+
+        status: s.status,
+        outcomeText: s.outcomeText,
+      }));
+
+      setShifts(mapped);
+
+      // Nếu chưa có shift được chọn thì chọn cái đầu tiên
+      if (!selectedId && mapped.length > 0) {
+        setSelectedId(mapped[0].id);
+      }
+
+      console.log("[Home] Loaded shifts:", mapped.length);
+    } catch (err: any) {
+      console.error("[Home] Failed to load shifts:", err);
+      setError(err?.message || "Failed to load today's shifts.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadTodayShifts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const selectedShift =
     shifts.find((shift) => shift.id === selectedId) ?? null;
 
+  /** ============================
+   *  Actions
+   *  ============================ */
+
   const handleCheckInOut = () => {
     if (!selectedShift) return;
 
-    if (selectedShift.status === "COMPLETED") {
-      Alert.alert("Info", "This shift is already completed.");
-      return;
-    }
-
-    const currentTime = getCurrentTimeHHMM();
-
     if (selectedShift.status === "NOT_STARTED") {
-      // Check in: set visitStart + đổi trạng thái sang IN_PROGRESS
-      setShifts((prev) =>
-        prev.map((shift) =>
-          shift.id === selectedShift.id
-            ? {
-                ...shift,
-                status: "IN_PROGRESS",
-                visitStart: currentTime,
-              }
-            : shift
-        )
-      );
-
       Alert.alert(
         "Check in",
-        `You checked in to ${selectedShift.individualName} at ${currentTime}.`
-      );
-    } else if (selectedShift.status === "IN_PROGRESS") {
-      // Check out: set visitEnd + đổi trạng thái sang COMPLETED
-      setShifts((prev) =>
-        prev.map((shift) =>
-          shift.id === selectedShift.id
-            ? {
-                ...shift,
-                status: "COMPLETED",
-                visitEnd: currentTime,
-              }
-            : shift
-        )
+        `You checked in to ${selectedShift.individualName}. (frontend only)`
       );
 
+      // Tạm thời chỉ cập nhật UI, chưa gọi API check-in
+      setShifts((prev) =>
+        prev.map((s) =>
+          s.id === selectedShift.id ? { ...s, status: "IN_PROGRESS" } : s
+        )
+      );
+    } else if (selectedShift.status === "IN_PROGRESS") {
       Alert.alert(
         "Check out",
-        `You checked out from ${selectedShift.individualName} at ${currentTime}.`
+        `You checked out from ${selectedShift.individualName}. (frontend only)`
       );
+
+      setShifts((prev) =>
+        prev.map((s) =>
+          s.id === selectedShift.id ? { ...s, status: "COMPLETED" } : s
+        )
+      );
+    } else {
+      Alert.alert("Info", "This shift is already completed.");
     }
   };
 
@@ -177,15 +222,20 @@ export default function HomeScreen({ navigation }: Props) {
       individualAddress: selectedShift.individualAddress,
 
       serviceCode: selectedShift.serviceCode,
-      serviceName: selectedShift.service,
+      serviceName: selectedShift.serviceName,
 
-      scheduleStart: selectedShift.startTime,
-      scheduleEnd: selectedShift.endTime,
+      scheduleStart: selectedShift.scheduleStart,
+      scheduleEnd: selectedShift.scheduleEnd,
+
       outcomeText: selectedShift.outcomeText,
     });
   };
 
-  const renderShift = ({ item }: { item: Shift }) => {
+  /** ============================
+   *  Render shift card
+   *  ============================ */
+
+  const renderShift = ({ item }: { item: TodayShift }) => {
     const isSelected = item.id === selectedId;
 
     let statusStyle = styles.statusNotStarted;
@@ -205,32 +255,19 @@ export default function HomeScreen({ navigation }: Props) {
         onPress={() => setSelectedId(item.id)}
       >
         <Text style={styles.shiftIndividual}>{item.individualName}</Text>
-        <Text style={styles.shiftText}>{item.service}</Text>
+        <Text style={styles.shiftText}>{item.serviceName}</Text>
         <Text style={styles.shiftText}>
-          {item.startTime} – {item.endTime}
+          {item.scheduleStart} – {item.scheduleEnd}
         </Text>
         <Text style={styles.shiftLocation}>{item.location}</Text>
-
-        {(item.visitStart || item.visitEnd) && (
-          <Text style={styles.actualTime}>
-            Actual: {item.visitStart ?? "--:--"} – {item.visitEnd ?? "--:--"}
-          </Text>
-        )}
-
         <Text style={[styles.status, statusStyle]}>{statusLabel}</Text>
       </TouchableOpacity>
     );
   };
 
-  const primaryButtonLabel =
-    !selectedShift || selectedShift.status === "NOT_STARTED"
-      ? "Check in"
-      : selectedShift.status === "IN_PROGRESS"
-      ? "Check out"
-      : "Completed";
-
-  const primaryButtonDisabled =
-    !selectedShift || selectedShift.status === "COMPLETED";
+  /** ============================
+   *  Render
+   *  ============================ */
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -241,6 +278,21 @@ export default function HomeScreen({ navigation }: Props) {
 
         {/* Danh sách ca trực trong ngày */}
         <Text style={styles.sectionTitle}>Today&apos;s Shifts</Text>
+
+        {loading && (
+          <Text style={styles.infoText}>Loading today&apos;s shifts...</Text>
+        )}
+
+        {!loading && error && (
+          <Text style={styles.errorText}>{error}</Text>
+        )}
+
+        {!loading && !error && shifts.length === 0 && (
+          <Text style={styles.infoText}>
+            No shifts scheduled for today.
+          </Text>
+        )}
+
         <FlatList
           data={shifts}
           horizontal
@@ -254,21 +306,25 @@ export default function HomeScreen({ navigation }: Props) {
         {selectedShift && (
           <View style={styles.actions}>
             <TouchableOpacity
-              style={[
-                styles.primaryButton,
-                primaryButtonDisabled && styles.primaryButtonDisabled,
-              ]}
+              style={styles.primaryButton}
               onPress={handleCheckInOut}
-              disabled={primaryButtonDisabled}
             >
-              <Text style={styles.primaryButtonText}>{primaryButtonLabel}</Text>
+              <Text style={styles.primaryButtonText}>
+                {selectedShift.status === "IN_PROGRESS"
+                  ? "Check out"
+                  : selectedShift.status === "COMPLETED"
+                  ? "Completed"
+                  : "Check in"}
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.secondaryButton}
               onPress={handleOpenDailyNote}
             >
-              <Text style={styles.secondaryButtonText}>Open Daily Note</Text>
+              <Text style={styles.secondaryButtonText}>
+                Open Daily Note
+              </Text>
             </TouchableOpacity>
           </View>
         )}
@@ -276,6 +332,10 @@ export default function HomeScreen({ navigation }: Props) {
     </SafeAreaView>
   );
 }
+
+/** ============================
+ *  Styles
+ *  ============================ */
 
 const styles = StyleSheet.create({
   safe: {
@@ -300,6 +360,16 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: "700",
+    marginBottom: 8,
+  },
+  infoText: {
+    fontSize: 14,
+    color: "#6b7280",
+    marginBottom: 8,
+  },
+  errorText: {
+    fontSize: 14,
+    color: "#b91c1c",
     marginBottom: 8,
   },
   shiftList: {
@@ -335,11 +405,6 @@ const styles = StyleSheet.create({
     color: "#9ca3af",
     marginTop: 4,
   },
-  actualTime: {
-    fontSize: 12,
-    color: "#4b5563",
-    marginTop: 4,
-  },
   status: {
     marginTop: 8,
     fontSize: 12,
@@ -363,9 +428,6 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     alignItems: "center",
     marginBottom: 12,
-  },
-  primaryButtonDisabled: {
-    backgroundColor: "#9ca3af",
   },
   primaryButtonText: {
     color: "#ffffff",
