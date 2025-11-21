@@ -10,7 +10,7 @@ import {
  * - NHỚ: dùng http:// (không phải https://)
  * - Mỗi khi đổi máy / đổi mạng, IP có thể thay đổi → cần sửa lại cho đúng.
  */
-const API_BASE = "http://192.168.0.141:3000";
+const API_BASE = "http://10.0.0.83:3000";
 
 // Export thêm cho đúng với tài liệu hướng dẫn (nếu sau này có dùng tới)
 export const API_BASE_URL = API_BASE;
