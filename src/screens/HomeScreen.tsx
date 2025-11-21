@@ -20,7 +20,8 @@ import {
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
-const STAFF_ID = "STAFF_DEMO";
+// 🔴 NHỚ ĐỔI thành Employee.id thực của DSP Janette
+const STAFF_ID = "cmhtcungm0000jm04gf80ym4w";
 
 /** Đổi ISO time từ backend -> HH:MM local (24h) */
 const formatTimeHM = (iso: string | undefined | null): string => {
@@ -57,8 +58,18 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       setLoading(true);
       const today = getTodayDate();
       const data = await getTodayShifts(STAFF_ID, today);
-      setShifts(data || []);
-      setSelectedIndex(0);
+      const list = data || [];
+
+      setShifts(list);
+
+      if (list.length === 0) {
+        setSelectedIndex(0);
+        return;
+      }
+
+      // 🔵 ƯU TIÊN chọn ca ĐANG LÀM hoặc CHƯA BẮT ĐẦU
+      const idxNotCompleted = list.findIndex((s) => s.status !== "COMPLETED");
+      setSelectedIndex(idxNotCompleted >= 0 ? idxNotCompleted : 0);
     } catch (err: any) {
       console.error("Load shifts error:", err);
       Alert.alert("Error", "Failed to load today shifts from server.");
@@ -117,12 +128,14 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
 
       if (selectedShift.status === "IN_PROGRESS") {
         // ===== CHECK OUT =====
-        const res = await checkOutShift(String(selectedShift.id), STAFF_ID);
+        const res: any = await checkOutShift(
+          String(selectedShift.id),
+          STAFF_ID
+        );
         console.log("Check-out OK for shift", selectedShift.id, res);
 
-        const visitEndLocal = formatTimeHM(res.time);
+        const visitEndLocal = res?.time ? formatTimeHM(res.time) : "";
 
-        // Cập nhật local state để UI & DailyNote dùng được ngay
         setShifts((prev) =>
           prev.map((s) =>
             s.id === selectedShift.id
@@ -137,17 +150,16 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
 
         Alert.alert("Check out", "You have checked out successfully.");
       } else {
-        // NOT_STARTED (cho check in), COMPLETED thì chặn
         if (selectedShift.status === "COMPLETED") {
           Alert.alert("Info", "This shift is already completed.");
           return;
         }
 
         // ===== CHECK IN =====
-        const res = await checkInShift(String(selectedShift.id), STAFF_ID);
+        const res: any = await checkInShift(String(selectedShift.id), STAFF_ID);
         console.log("Check-in OK for shift", selectedShift.id, res);
 
-        const visitStartLocal = formatTimeHM(res.time);
+        const visitStartLocal = res?.time ? formatTimeHM(res.time) : "";
 
         setShifts((prev) =>
           prev.map((s) =>
@@ -194,7 +206,6 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       scheduleStart: selectedShift.scheduleStart,
       scheduleEnd: selectedShift.scheduleEnd,
       outcomeText: selectedShift.outcomeText,
-      // NEW: truyền visitStart / visitEnd cho DailyNote auto-fill
       visitStart: selectedShift.visitStart ?? "",
       visitEnd: selectedShift.visitEnd ?? "",
     });
