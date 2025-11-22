@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -20,10 +21,10 @@ import {
 
 type Props = NativeStackScreenProps<RootStackParamList, "Home">;
 
-// 🔴 NHỚ ĐỔI thành Employee.id thực của DSP Janette
+// Tạm thời hard-code; sau này lấy từ Login
 const STAFF_ID = "cmhtcungm0000jm04gf80ym4w";
 
-/** Đổi ISO time từ backend -> HH:MM local (24h) */
+/** (Hiện chưa dùng – để lại phòng khi cần format ISO -> HH:MM) */
 const formatTimeHM = (iso: string | undefined | null): string => {
   if (!iso) return "";
   const d = new Date(iso);
@@ -40,10 +41,11 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [todayLabel, setTodayLabel] = useState("");
 
   const selectedShift = shifts[selectedIndex];
 
-  /** Tính ngày hôm nay theo định dạng YYYY-MM-DD */
+  /** Tính ngày hôm nay theo định dạng YYYY-MM-DD (dùng cho API) */
   const getTodayDate = () => {
     const d = new Date();
     const year = d.getFullYear();
@@ -58,18 +60,8 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
       setLoading(true);
       const today = getTodayDate();
       const data = await getTodayShifts(STAFF_ID, today);
-      const list = data || [];
-
-      setShifts(list);
-
-      if (list.length === 0) {
-        setSelectedIndex(0);
-        return;
-      }
-
-      // 🔵 ƯU TIÊN chọn ca ĐANG LÀM hoặc CHƯA BẮT ĐẦU
-      const idxNotCompleted = list.findIndex((s) => s.status !== "COMPLETED");
-      setSelectedIndex(idxNotCompleted >= 0 ? idxNotCompleted : 0);
+      setShifts(data || []);
+      setSelectedIndex(0);
     } catch (err: any) {
       console.error("Load shifts error:", err);
       Alert.alert("Error", "Failed to load today shifts from server.");
@@ -79,6 +71,15 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   };
 
   useEffect(() => {
+    // Label Today • Sat, Nov 22
+    const d = new Date();
+    const dateText = d.toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    setTodayLabel(dateText);
+
     loadShifts();
   }, []);
 
@@ -116,7 +117,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   const isCheckButtonDisabled = (status: MobileShift["status"]) =>
     status === "COMPLETED";
 
-  /** Xử lý bấm nút Check in / Check out */
+  /** Xử lý bấm nút Check in / Check out cho shift đang chọn */
   const handleCheckInOut = async () => {
     if (!selectedShift) {
       Alert.alert("No shift", "No shift selected.");
@@ -128,26 +129,10 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
 
       if (selectedShift.status === "IN_PROGRESS") {
         // ===== CHECK OUT =====
-        const res: any = await checkOutShift(
-          String(selectedShift.id),
-          STAFF_ID
-        );
-        console.log("Check-out OK for shift", selectedShift.id, res);
+        await checkOutShift(String(selectedShift.id), STAFF_ID);
+        console.log("Check-out OK for shift", selectedShift.id);
 
-        const visitEndLocal = res?.time ? formatTimeHM(res.time) : "";
-
-        setShifts((prev) =>
-          prev.map((s) =>
-            s.id === selectedShift.id
-              ? {
-                  ...s,
-                  status: "COMPLETED",
-                  visitEnd: visitEndLocal,
-                }
-              : s
-          )
-        );
-
+        await loadShifts();
         Alert.alert("Check out", "You have checked out successfully.");
       } else {
         if (selectedShift.status === "COMPLETED") {
@@ -156,28 +141,12 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         }
 
         // ===== CHECK IN =====
-        const res: any = await checkInShift(String(selectedShift.id), STAFF_ID);
-        console.log("Check-in OK for shift", selectedShift.id, res);
+        await checkInShift(String(selectedShift.id), STAFF_ID);
+        console.log("Check-in OK for shift", selectedShift.id);
 
-        const visitStartLocal = res?.time ? formatTimeHM(res.time) : "";
-
-        setShifts((prev) =>
-          prev.map((s) =>
-            s.id === selectedShift.id
-              ? {
-                  ...s,
-                  status: "IN_PROGRESS",
-                  visitStart: visitStartLocal,
-                }
-              : s
-          )
-        );
-
+        await loadShifts();
         Alert.alert("Check in", "You have checked in successfully.");
       }
-
-      // Sau khi update local, vẫn reload lại từ backend cho chắc
-      await loadShifts();
     } catch (err: any) {
       console.error("Check in/out error:", err);
       Alert.alert("Error", "Failed to perform check in/out.");
@@ -220,46 +189,73 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           paddingBottom: 24,
         }}
       >
-        {/* Header */}
-        <Text
+        {/* App header với logo + tên app */}
+        <View
           style={{
-            fontSize: 20,
-            fontWeight: "800",
-            textAlign: "center",
+            flexDirection: "row",
+            alignItems: "center",
             marginBottom: 16,
-            color: "#111827",
           }}
         >
-          Blue Angels Care
-        </Text>
+          <Image
+            source={require("../../assets/adaptive-icon.png")}
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 12,
+              marginRight: 10,
+            }}
+          />
+          <View>
+            <Text
+              style={{
+                fontSize: 20,
+                fontWeight: "800",
+                color: "#111827",
+              }}
+            >
+              Blue Angels Care
+            </Text>
+            <Text
+              style={{
+                fontSize: 13,
+                fontWeight: "500",
+                color: "#6B7280",
+              }}
+            >
+              Mobile DSP Companion
+            </Text>
+          </View>
+        </View>
 
+        {/* Welcome text */}
         <Text
           style={{
-            fontSize: 26,
+            fontSize: 22,
             fontWeight: "800",
             color: "#111827",
             marginBottom: 4,
           }}
         >
-          Blue Angels Care Mobile
+          Welcome, DSP!
         </Text>
         <Text
           style={{
-            fontSize: 18,
-            fontWeight: "600",
-            color: "#4B5563",
-            marginBottom: 20,
+            fontSize: 14,
+            fontWeight: "500",
+            color: "#6B7280",
+            marginBottom: 18,
           }}
         >
-          Welcome, DSP!
+          Today • {todayLabel || ""}
         </Text>
 
         <Text
           style={{
-            fontSize: 20,
+            fontSize: 18,
             fontWeight: "800",
             color: "#111827",
-            marginBottom: 12,
+            marginBottom: 10,
           }}
         >
           Today&apos;s Shifts
@@ -274,84 +270,98 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         {!loading && shifts.length === 0 && (
           <View
             style={{
-              padding: 16,
+              padding: 14,
               borderRadius: 16,
               backgroundColor: "#E5E7EB",
             }}
           >
-            <Text style={{ color: "#4B5563" }}>
+            <Text style={{ color: "#4B5563", fontSize: 14 }}>
               You have no scheduled shifts for today.
             </Text>
           </View>
         )}
 
-        {!loading && shifts.length > 0 && selectedShift && (
-          <TouchableOpacity
-            activeOpacity={0.9}
-            style={{
-              borderRadius: 24,
-              borderWidth: 2,
-              borderColor: "#2563EB",
-              backgroundColor: "#FFFFFF",
-              padding: 16,
-              marginBottom: 24,
-            }}
-          >
-            <Text
-              style={{
-                fontSize: 24,
-                fontWeight: "800",
-                color: "#111827",
-                marginBottom: 4,
-              }}
-            >
-              {selectedShift.individualName}
-            </Text>
+        {/* Danh sách nhiều shifts – chọn bằng cách bấm card */}
+        {!loading && shifts.length > 0 && (
+          <View style={{ gap: 12 }}>
+            {shifts.map((shift, index) => {
+              const isSelected = index === selectedIndex;
+              return (
+                <TouchableOpacity
+                  key={shift.id}
+                  activeOpacity={0.9}
+                  onPress={() => setSelectedIndex(index)}
+                  style={{
+                    borderRadius: 20,
+                    borderWidth: 2,
+                    borderColor: isSelected ? "#2563EB" : "#E5E7EB",
+                    backgroundColor: "#FFFFFF",
+                    padding: 14,
+                    shadowColor: "#000",
+                    shadowOpacity: 0.05,
+                    shadowRadius: 6,
+                    shadowOffset: { width: 0, height: 2 },
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 18,
+                      fontWeight: "800",
+                      color: "#111827",
+                      marginBottom: 4,
+                    }}
+                  >
+                    {shift.individualName}
+                  </Text>
 
-            <Text
-              style={{
-                fontSize: 18,
-                fontWeight: "600",
-                color: "#111827",
-                marginBottom: 4,
-              }}
-            >
-              {selectedShift.serviceCode} – {selectedShift.serviceName}
-            </Text>
+                  <Text
+                    style={{
+                      fontSize: 14,
+                      fontWeight: "600",
+                      color: "#111827",
+                      marginBottom: 2,
+                    }}
+                  >
+                    {shift.serviceCode} – {shift.serviceName}
+                  </Text>
 
-            <Text
-              style={{
-                fontSize: 18,
-                color: "#4B5563",
-                marginBottom: 4,
-              }}
-            >
-              {selectedShift.scheduleStart} – {selectedShift.scheduleEnd}
-            </Text>
+                  <Text
+                    style={{
+                      fontSize: 14,
+                      color: "#4B5563",
+                      marginBottom: 2,
+                    }}
+                  >
+                    {shift.scheduleStart} – {shift.scheduleEnd}
+                  </Text>
 
-            <Text
-              style={{
-                fontSize: 16,
-                color: "#6B7280",
-                marginBottom: 8,
-              }}
-            >
-              {selectedShift.location}
-            </Text>
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      color: "#6B7280",
+                      marginBottom: 6,
+                    }}
+                  >
+                    {shift.location || "Community"}
+                  </Text>
 
-            <Text
-              style={{
-                fontSize: 18,
-                fontWeight: "700",
-                color: getStatusColor(selectedShift.status),
-              }}
-            >
-              {getStatusLabel(selectedShift.status)}
-            </Text>
-          </TouchableOpacity>
+                  <Text
+                    style={{
+                      fontSize: 14,
+                      fontWeight: "700",
+                      color: getStatusColor(shift.status),
+                    }}
+                  >
+                    {getStatusLabel(shift.status)}
+                    {isSelected ? "  • Selected" : ""}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         )}
 
-        {/* Check in / Check out button */}
+        {/* Check in / Check out cho shift đang chọn */}
         {shifts.length > 0 && selectedShift && (
           <TouchableOpacity
             onPress={handleCheckInOut}
@@ -360,16 +370,17 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               backgroundColor: isCheckButtonDisabled(selectedShift.status)
                 ? "#9CA3AF"
                 : "#2563EB",
-              paddingVertical: 14,
+              paddingVertical: 12,
               borderRadius: 999,
               alignItems: "center",
-              marginBottom: 12,
+              marginTop: 20,
+              marginBottom: 10,
             }}
           >
             <Text
               style={{
                 color: "#FFFFFF",
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: "800",
               }}
             >
@@ -380,7 +391,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
           </TouchableOpacity>
         )}
 
-        {/* Open Daily Note */}
+        {/* Open Daily Note cho shift đang chọn */}
         {shifts.length > 0 && selectedShift && (
           <TouchableOpacity
             onPress={handleOpenDailyNote}
@@ -388,7 +399,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
               backgroundColor: "#FFFFFF",
               borderWidth: 1,
               borderColor: "#111827",
-              paddingVertical: 14,
+              paddingVertical: 12,
               borderRadius: 999,
               alignItems: "center",
             }}
@@ -396,7 +407,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             <Text
               style={{
                 color: "#111827",
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: "800",
               }}
             >
