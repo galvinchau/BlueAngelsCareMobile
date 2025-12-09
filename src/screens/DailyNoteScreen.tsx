@@ -1,527 +1,437 @@
 // src/screens/DailyNoteScreen.tsx
-import React, { useState, useMemo } from "react";
+import React, { useEffect, useState } from "react";
 import {
-  Alert,
-  ScrollView,
-  Text,
-  TextInput,
   View,
+  Text,
+  StyleSheet,
   TouchableOpacity,
+  ActivityIndicator,
+  ScrollView,
 } from "react-native";
-import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import {
+  getTodayShifts,
+  checkInShift,
+  checkOutShift,
+} from "../api/mobileClient";
+import type { MobileShift } from "../types/mobileApi";
 
-/** ==== Navigation types ==== */
-import type { RootStackParamList } from "../../App";
-import type { MobileDailyNotePayload } from "../types/mobileApi";
-import { submitDailyNote } from "../api/mobileClient";
+type DailyNoteScreenProps = {
+  navigation: any;
+  route: {
+    params?: {
+      shiftId?: string;
+      staffId?: string;
+      staffName?: string;
+      staffEmail?: string;
+      // optional: có thể truyền cả shift từ HomeScreen trong tương lai
+      shift?: MobileShift;
+    };
+  };
+};
 
-type Props = NativeStackScreenProps<RootStackParamList, "DailyNote">;
-
-/** ==== Small reusable components ==== */
-
-const Section = ({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) => (
-  <View style={{ marginBottom: 16 }}>
-    <Text
-      style={{
-        fontSize: 16,
-        fontWeight: "700",
-        marginBottom: 8,
-        color: "#111827",
-      }}
-    >
-      {title}
-    </Text>
-    {children}
-  </View>
-);
-
-const Label = ({ children }: { children: React.ReactNode }) => (
-  <Text
-    style={{
-      fontSize: 14,
-      fontWeight: "600",
-      marginBottom: 4,
-      color: "#374151",
-    }}
-  >
-    {children}
-  </Text>
-);
-
-const Input = (props: React.ComponentProps<typeof TextInput>) => (
-  <TextInput
-    {...props}
-    placeholderTextColor="#9CA3AF"
-    style={[
-      {
-        borderWidth: 1,
-        borderColor: "#D1D5DB",
-        borderRadius: 12,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        fontSize: 14,
-        color: "#111827",
-        backgroundColor: "#FFFFFF",
-      },
-      props.style,
-    ]}
-  />
-);
-
-const TextArea = (props: React.ComponentProps<typeof TextInput>) => (
-  <TextInput
-    {...props}
-    multiline
-    textAlignVertical="top"
-    placeholderTextColor="#9CA3AF"
-    style={[
-      {
-        borderWidth: 1,
-        borderColor: "#D1D5DB",
-        borderRadius: 12,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        fontSize: 14,
-        color: "#111827",
-        backgroundColor: "#FFFFFF",
-        minHeight: 80,
-      },
-      props.style,
-    ]}
-  />
-);
-
-const PrimaryButton = ({
-  title,
-  onPress,
-  disabled,
-}: {
-  title: string;
-  onPress: () => void;
-  disabled?: boolean;
-}) => (
-  <TouchableOpacity
-    onPress={onPress}
-    disabled={disabled}
-    style={{
-      backgroundColor: disabled ? "#9CA3AF" : "#0284C7",
-      paddingVertical: 12,
-      borderRadius: 999,
-      alignItems: "center",
-      marginTop: 8,
-    }}
-  >
-    <Text style={{ color: "white", fontWeight: "700", fontSize: 16 }}>
-      {title}
-    </Text>
-  </TouchableOpacity>
-);
-
-/** ==== Helper: format ISO -> HH:MM (theo giờ máy DSP) ==== */
-function formatTimeFromIso(iso?: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) {
-    // fallback: nếu backend trả chuỗi lạ thì hiển thị luôn
-    return iso;
-  }
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
+function formatDateYMD(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
-/** ==== Daily Note Screen ==== */
+function formatTimeFromIso(iso?: string | null): string {
+  if (!iso) return "--:--";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "--:--";
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
 
-export const DailyNoteScreen: React.FC<Props> = ({ route, navigation }) => {
-  const {
-    shiftId,
-    date,
-    individualId,
-    individualName,
-    individualDob,
-    individualMa,
-    individualAddress,
-    serviceCode,
-    serviceName,
-    scheduleStart,
-    scheduleEnd,
-    outcomeText,
-    // 2 field mới nhận từ HomeScreen (ISO time của Check in/out)
-    visitStart,
-    visitEnd,
-  } = route.params;
+const DailyNoteScreen: React.FC<DailyNoteScreenProps> = ({
+  navigation,
+  route,
+}) => {
+  const params = route?.params || {};
+  const shiftId = params.shiftId;
+  const staffId = params.staffId;
+  const staffName = params.staffName;
+  const staffEmail = params.staffEmail;
 
-  /** Thời gian hiển thị (HH:MM), chỉ đọc – không cho sửa tay */
-  const visitStartDisplay = useMemo(
-    () => formatTimeFromIso(visitStart),
-    [visitStart]
-  );
-  const visitEndDisplay = useMemo(
-    () => formatTimeFromIso(visitEnd),
-    [visitEnd]
-  );
+  const [shift, setShift] = useState<MobileShift | null>(params.shift ?? null);
+  const [loading, setLoading] = useState<boolean>(!params.shift);
+  const [actionLoading, setActionLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
-  // Main content
-  const [todayPlan, setTodayPlan] = useState("");
-  const [whatWeWorkedOn, setWhatWeWorkedOn] = useState("");
-  const [opportunities, setOpportunities] = useState("");
-  const [notes, setNotes] = useState("");
+  const todayYmd = formatDateYMD(new Date());
 
-  // Meals
-  const [breakfastTime, setBreakfastTime] = useState("");
-  const [breakfastHad, setBreakfastHad] = useState("");
-  const [breakfastOffered, setBreakfastOffered] = useState("");
+  const hasCheckedIn = !!shift?.visitStart;
+  const hasCheckedOut = !!shift?.visitEnd;
 
-  const [lunchTime, setLunchTime] = useState("");
-  const [lunchHad, setLunchHad] = useState("");
-  const [lunchOffered, setLunchOffered] = useState("");
+  // ===========================
+  // Load shift detail (nếu chưa có)
+  // ===========================
+  useEffect(() => {
+    async function loadShift() {
+      if (!shiftId || !staffId) {
+        setError("Missing shiftId or staffId. Please go back and try again.");
+        setLoading(false);
+        return;
+      }
 
-  const [dinnerTime, setDinnerTime] = useState("");
-  const [dinnerHad, setDinnerHad] = useState("");
-  const [dinnerOffered, setDinnerOffered] = useState("");
+      try {
+        setLoading(true);
+        setError(null);
+        setMessage(null);
 
-  // Health / Incident
-  const [healthNotes, setHealthNotes] = useState("");
-  const [incidentNotes, setIncidentNotes] = useState("");
+        const todaysShifts = await getTodayShifts(staffId, todayYmd);
+        const found = todaysShifts.find((s) => s.id === shiftId) ?? null;
 
-  // Signature
-  const [staffName, setStaffName] = useState("");
-  const [certifyText, setCertifyText] = useState(
-    "I certify that the above services were delivered as documented."
-  );
+        if (!found) {
+          setError(
+            "Could not find this shift in today's list. Please contact the office."
+          );
+        }
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
+        setShift(found);
+      } catch (e) {
+        console.error("[DailyNoteScreen] loadShift error:", e);
+        setError("Failed to load shift information. Please try again.");
+      } finally {
+        setLoading(false);
+      }
+    }
 
-  const handleSubmit = async () => {
-    const staffId = "STAFF_DEMO"; // TODO: sau này lấy từ login
+    if (!shift && shiftId && staffId) {
+      loadShift();
+    }
+  }, [shift, shiftId, staffId, todayYmd]);
 
-    const payload: MobileDailyNotePayload = {
-      shiftId,
-      staffId,
-      individualId,
+  // ===========================
+  // Check In
+  // ===========================
+  async function handleCheckIn() {
+    if (!shift || !staffId) return;
 
-      date,
-      individualName,
-      individualDob,
-      individualMa,
-      individualAddress,
-
-      serviceCode,
-      serviceName,
-      scheduleStart,
-      scheduleEnd,
-      outcomeText,
-
-      // Gửi đúng dữ liệu giờ từ shift (ISO hoặc chuỗi backend trả)
-      visitStart: visitStart ?? undefined,
-      visitEnd: visitEnd ?? undefined,
-
-      todayPlan,
-      whatWeWorkedOn,
-      opportunities,
-      notes,
-
-      meals: {
-        breakfast: {
-          time: breakfastTime || undefined,
-          had: breakfastHad || undefined,
-          offered: breakfastOffered || undefined,
-        },
-        lunch: {
-          time: lunchTime || undefined,
-          had: lunchHad || undefined,
-          offered: lunchOffered || undefined,
-        },
-        dinner: {
-          time: dinnerTime || undefined,
-          had: dinnerHad || undefined,
-          offered: dinnerOffered || undefined,
-        },
-      },
-
-      healthNotes: healthNotes || undefined,
-      incidentNotes: incidentNotes || undefined,
-
-      staffName,
-      certifyText,
-    };
+    setActionLoading(true);
+    setError(null);
+    setMessage(null);
 
     try {
-      setIsSubmitting(true);
-      const result = await submitDailyNote(payload);
+      const res: any = await checkInShift(shift.id, staffId);
 
-      console.log("DailyNote submit result:", result);
+      // backend có thể trả về shift mới trong res.shift
+      const updated: MobileShift = res?.shift
+        ? {
+            ...shift,
+            ...res.shift,
+          }
+        : {
+            ...shift,
+            visitStart: new Date().toISOString(),
+            status: "IN_PROGRESS",
+          };
 
-      Alert.alert("Daily Note", "Daily Note has been submitted to backend.", [
-        {
-          text: "OK",
-          onPress: () => navigation.goBack(),
-        },
-        {
-          text: "Show JSON",
-          onPress: () => console.log("DailyNote payload:", payload),
-          style: "default",
-        },
-      ]);
-    } catch (err: any) {
-      console.error("DailyNote submit error:", err);
-      Alert.alert("Error", "Failed to submit Daily Note. Please try again.");
+      setShift(updated);
+      setMessage("Checked in successfully.");
+    } catch (e) {
+      console.error("[DailyNoteScreen] handleCheckIn error:", e);
+      setError("Failed to check in. Please try again.");
     } finally {
-      setIsSubmitting(false);
+      setActionLoading(false);
     }
-  };
+  }
+
+  // ===========================
+  // Check Out
+  // ===========================
+  async function handleCheckOut() {
+    if (!shift || !staffId) return;
+
+    setActionLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const res: any = await checkOutShift(shift.id, staffId);
+
+      const updated: MobileShift = res?.shift
+        ? {
+            ...shift,
+            ...res.shift,
+          }
+        : {
+            ...shift,
+            visitEnd: new Date().toISOString(),
+            status: "COMPLETED",
+          };
+
+      setShift(updated);
+      setMessage("Checked out successfully.");
+    } catch (e) {
+      console.error("[DailyNoteScreen] handleCheckOut error:", e);
+      setError("Failed to check out. Please try again.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  // ===========================
+  // UI
+  // ===========================
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#22c55e" />
+        <Text style={styles.loadingText}>Loading shift...</Text>
+      </View>
+    );
+  }
+
+  if (!shift) {
+    return (
+      <View style={styles.centerContainer}>
+        <Text style={styles.errorTitle}>Daily Note</Text>
+        <Text style={styles.errorText}>
+          No shift data found. Please go back to Visits and try again.
+        </Text>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backButtonText}>Back to Visits</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#F3F4F6" }}>
-      <ScrollView
-        contentContainerStyle={{
-          paddingHorizontal: 16,
-          paddingVertical: 16,
-          paddingBottom: 32,
-        }}
-      >
-        {/* Header */}
-        <Text
-          style={{
-            fontSize: 20,
-            fontWeight: "800",
-            marginBottom: 12,
-            color: "#111827",
-            textAlign: "center",
-          }}
-        >
-          Daily Note
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
+      <Text style={styles.pageTitle}>Daily Note</Text>
+      <Text style={styles.pageSubtitle}>
+        {shift.individualName || "Individual"} • {shift.serviceName}
+      </Text>
+
+      {/* Shift summary card */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Shift Details</Text>
+
+        <Text style={styles.label}>DSP</Text>
+        <Text style={styles.value}>{staffName || "Current DSP"}</Text>
+
+        <Text style={styles.label}>Email</Text>
+        <Text style={styles.value}>{staffEmail || "-"}</Text>
+
+        <Text style={styles.label}>Individual</Text>
+        <Text style={styles.value}>{shift.individualName || "-"}</Text>
+
+        <Text style={styles.label}>Service</Text>
+        <Text style={styles.value}>{shift.serviceName}</Text>
+
+        <Text style={styles.label}>Schedule</Text>
+        <Text style={styles.value}>
+          {shift.scheduleStart} – {shift.scheduleEnd} ({shift.location})
         </Text>
 
-        {/* Individual info */}
-        <Section title="Individual information">
-          <Label>Individual</Label>
-          <Input value={individualName} editable={false} />
+        <Text style={styles.label}>Check-in</Text>
+        <Text style={styles.value}>
+          {hasCheckedIn ? formatTimeFromIso(shift.visitStart) : "Not yet"}
+        </Text>
 
-          <View style={{ height: 8 }} />
+        <Text style={styles.label}>Check-out</Text>
+        <Text style={styles.value}>
+          {hasCheckedOut ? formatTimeFromIso(shift.visitEnd) : "Not yet"}
+        </Text>
 
-          <Label>Date of Birth</Label>
-          <Input value={individualDob || ""} editable={false} />
+        <Text style={styles.label}>Status</Text>
+        <Text style={styles.value}>
+          {shift.status === "COMPLETED"
+            ? "Completed"
+            : shift.status === "IN_PROGRESS"
+            ? "In progress"
+            : "Not started"}
+        </Text>
+      </View>
 
-          <View style={{ height: 8 }} />
+      {/* Actions */}
+      {error ? <Text style={styles.errorMessage}>{error}</Text> : null}
+      {message ? <Text style={styles.infoMessage}>{message}</Text> : null}
 
-          <Label>MA#</Label>
-          <Input value={individualMa || ""} editable={false} />
+      <View style={styles.actionsRow}>
+        <TouchableOpacity
+          style={[
+            styles.primaryButton,
+            hasCheckedIn || actionLoading ? styles.disabledButton : null,
+          ]}
+          disabled={hasCheckedIn || actionLoading}
+          onPress={handleCheckIn}
+        >
+          {actionLoading && !hasCheckedIn ? (
+            <ActivityIndicator color="#0f172a" />
+          ) : (
+            <Text style={styles.primaryButtonText}>Check In</Text>
+          )}
+        </TouchableOpacity>
 
-          <View style={{ height: 8 }} />
+        <TouchableOpacity
+          style={[
+            styles.secondaryButton,
+            !hasCheckedIn || hasCheckedOut || actionLoading
+              ? styles.disabledButton
+              : null,
+          ]}
+          disabled={!hasCheckedIn || hasCheckedOut || actionLoading}
+          onPress={handleCheckOut}
+        >
+          {actionLoading && hasCheckedIn && !hasCheckedOut ? (
+            <ActivityIndicator color="#e5e7eb" />
+          ) : (
+            <Text style={styles.secondaryButtonText}>Check Out</Text>
+          )}
+        </TouchableOpacity>
+      </View>
 
-          <Label>Address</Label>
-          <Input value={individualAddress || ""} editable={false} />
-
-          <View style={{ height: 8 }} />
-
-          <Label>Date of service</Label>
-          <Input value={date} editable={false} />
-        </Section>
-
-        {/* Service + Schedule */}
-        <Section title="Service & Schedule">
-          <Label>Service</Label>
-          <Input value={serviceName} editable={false} />
-
-          <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Label>Schedule Start</Label>
-              <Input value={scheduleStart} editable={false} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Label>Schedule End</Label>
-              <Input value={scheduleEnd} editable={false} />
-            </View>
-          </View>
-
-          <View style={{ height: 8 }} />
-
-          <Label>ISP Outcome / Goal</Label>
-          <TextArea value={outcomeText || ""} editable={false} />
-        </Section>
-
-        {/* Visit times - auto-filled, read-only */}
-        <Section title="Visit actual time">
-          <View style={{ flexDirection: "row", gap: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Label>Visit Start (HH:MM)</Label>
-              <Input
-                value={visitStartDisplay}
-                editable={false}
-                placeholder="Auto-filled from Check in"
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Label>Visit End (HH:MM)</Label>
-              <Input
-                value={visitEndDisplay}
-                editable={false}
-                placeholder="Auto-filled from Check out"
-              />
-            </View>
-          </View>
-        </Section>
-
-        {/* Main content */}
-        <Section title="Service activities">
-          <Label>Today&apos;s plan</Label>
-          <TextArea
-            placeholder="Planned goals, objectives, or tasks for this visit..."
-            value={todayPlan}
-            onChangeText={setTodayPlan}
-          />
-
-          <View style={{ height: 8 }} />
-
-          <Label>What we worked on today</Label>
-          <TextArea
-            placeholder="Describe support provided, skills practiced, community activities..."
-            value={whatWeWorkedOn}
-            onChangeText={setWhatWeWorkedOn}
-          />
-
-          <View style={{ height: 8 }} />
-
-          <Label>Opportunities / Progress</Label>
-          <TextArea
-            placeholder="Progress toward outcomes, strengths, challenges, next steps..."
-            value={opportunities}
-            onChangeText={setOpportunities}
-          />
-
-          <View style={{ height: 8 }} />
-
-          <Label>Additional notes</Label>
-          <TextArea
-            placeholder="Any additional notes, family communication, safety reminders..."
-            value={notes}
-            onChangeText={setNotes}
-          />
-        </Section>
-
-        {/* Meals */}
-        <Section title="Meals">
-          <Label>Breakfast</Label>
-          <View style={{ flexDirection: "row", gap: 8, marginBottom: 6 }}>
-            <View style={{ flex: 1 }}>
-              <Input
-                placeholder="Time (HH:MM)"
-                value={breakfastTime}
-                onChangeText={setBreakfastTime}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Input
-                placeholder="Had (Y/N / amount)"
-                value={breakfastHad}
-                onChangeText={setBreakfastHad}
-              />
-            </View>
-          </View>
-          <Input
-            placeholder="Offered (description)"
-            value={breakfastOffered}
-            onChangeText={setBreakfastOffered}
-          />
-
-          <View style={{ height: 10 }} />
-
-          <Label>Lunch</Label>
-          <View style={{ flexDirection: "row", gap: 8, marginBottom: 6 }}>
-            <View style={{ flex: 1 }}>
-              <Input
-                placeholder="Time (HH:MM)"
-                value={lunchTime}
-                onChangeText={setLunchTime}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Input
-                placeholder="Had (Y/N / amount)"
-                value={lunchHad}
-                onChangeText={setLunchHad}
-              />
-            </View>
-          </View>
-          <Input
-            placeholder="Offered (description)"
-            value={lunchOffered}
-            onChangeText={setLunchOffered}
-          />
-
-          <View style={{ height: 10 }} />
-
-          <Label>Dinner</Label>
-          <View style={{ flexDirection: "row", gap: 8, marginBottom: 6 }}>
-            <View style={{ flex: 1 }}>
-              <Input
-                placeholder="Time (HH:MM)"
-                value={dinnerTime}
-                onChangeText={setDinnerTime}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Input
-                placeholder="Had (Y/N / amount)"
-                value={dinnerHad}
-                onChangeText={setDinnerHad}
-              />
-            </View>
-          </View>
-          <Input
-            placeholder="Offered (description)"
-            value={dinnerOffered}
-            onChangeText={setDinnerOffered}
-          />
-        </Section>
-
-        {/* Health & incidents */}
-        <Section title="Health & behavior">
-          <Label>Health / observations</Label>
-          <TextArea
-            placeholder="Any changes in health, mood, sleep, hygiene, etc."
-            value={healthNotes}
-            onChangeText={setHealthNotes}
-          />
-
-          <View style={{ height: 8 }} />
-
-          <Label>Incidents / medication issues</Label>
-          <TextArea
-            placeholder="Any incident, injury, behavior, or medication concerns."
-            value={incidentNotes}
-            onChangeText={setIncidentNotes}
-          />
-        </Section>
-
-        {/* Signature */}
-        <Section title="DSP certification">
-          <Label>Staff name</Label>
-          <Input
-            placeholder="Your full name"
-            value={staffName}
-            onChangeText={setStaffName}
-          />
-
-          <View style={{ height: 8 }} />
-
-          <Label>Certification text</Label>
-          <TextArea value={certifyText} onChangeText={setCertifyText} />
-        </Section>
-
-        <PrimaryButton
-          title={isSubmitting ? "Submitting..." : "Submit Daily Note"}
-          onPress={handleSubmit}
-          disabled={isSubmitting}
-        />
-      </ScrollView>
-    </View>
+      <TouchableOpacity
+        style={styles.backLink}
+        onPress={() => navigation.goBack()}
+      >
+        <Text style={styles.backLinkText}>Back to Visits</Text>
+      </TouchableOpacity>
+    </ScrollView>
   );
 };
+
+export default DailyNoteScreen;
+
+const styles = StyleSheet.create({
+  scroll: {
+    flex: 1,
+    backgroundColor: "#020617",
+  },
+  container: {
+    padding: 20,
+    paddingBottom: 40,
+    backgroundColor: "#020617",
+  },
+  centerContainer: {
+    flex: 1,
+    backgroundColor: "#020617",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 12,
+    color: "#e5e7eb",
+    fontSize: 16,
+  },
+  pageTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#e5e7eb",
+    marginBottom: 4,
+    textAlign: "center",
+  },
+  pageSubtitle: {
+    fontSize: 16,
+    color: "#9ca3af",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  card: {
+    backgroundColor: "#020617",
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#1f2937",
+    marginBottom: 20,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#e5e7eb",
+    marginBottom: 12,
+  },
+  label: {
+    fontSize: 13,
+    color: "#9ca3af",
+    marginTop: 6,
+  },
+  value: {
+    fontSize: 15,
+    color: "#e5e7eb",
+  },
+  actionsRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 16,
+  },
+  primaryButton: {
+    flex: 1,
+    backgroundColor: "#22c55e",
+    paddingVertical: 12,
+    borderRadius: 999,
+    alignItems: "center",
+  },
+  primaryButtonText: {
+    color: "#0f172a",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+  secondaryButton: {
+    flex: 1,
+    backgroundColor: "#111827",
+    paddingVertical: 12,
+    borderRadius: 999,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#4b5563",
+  },
+  secondaryButtonText: {
+    color: "#e5e7eb",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  errorTitle: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: "#e5e7eb",
+    marginBottom: 8,
+  },
+  errorText: {
+    color: "#fecaca",
+    fontSize: 15,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  backButton: {
+    backgroundColor: "#22c55e",
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 999,
+  },
+  backButtonText: {
+    color: "#0f172a",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+  errorMessage: {
+    color: "#fecaca",
+    marginBottom: 8,
+    fontSize: 14,
+  },
+  infoMessage: {
+    color: "#a5b4fc",
+    marginBottom: 8,
+    fontSize: 14,
+  },
+  backLink: {
+    marginTop: 8,
+    alignItems: "center",
+  },
+  backLinkText: {
+    color: "#93c5fd",
+    fontSize: 14,
+  },
+});

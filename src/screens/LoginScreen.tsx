@@ -1,249 +1,223 @@
 // src/screens/LoginScreen.tsx
 import React, { useState } from "react";
 import {
-  Image,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Switch,
+  View,
   Text,
+  StyleSheet,
   TextInput,
   TouchableOpacity,
-  View,
+  ActivityIndicator,
 } from "react-native";
-import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { requestLoginOtp, verifyLoginOtp } from "../api/mobileClient";
 
-import type { RootStackParamList } from "../../App";
+type LoginStep = "ENTER_EMAIL" | "ENTER_OTP";
 
-type Props = NativeStackScreenProps<RootStackParamList, "Login">;
+export default function LoginScreen({ navigation }: any) {
+  const [email, setEmail] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [step, setStep] = useState<LoginStep>("ENTER_EMAIL");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-const LoginScreen: React.FC<Props> = ({ navigation }) => {
-  const [email, setEmail] = useState<string>(""); // luôn rỗng khi mở app → hiện placeholder
-  const [password, setPassword] = useState<string>("");
-  const [rememberMe, setRememberMe] = useState<boolean>(false);
+  async function handleSendOtp() {
+    const trimmed = email.trim();
 
-  const handleSignIn = () => {
-    // Sau này gắn API thật + lấy staffId rồi chuyển sang Home
-    navigation.replace("Home");
-  };
+    if (!trimmed) {
+      setError("Please enter your email.");
+      return;
+    }
 
-  const handleResetPassword = () => {
-    // Chỗ này tạm thời chỉ log; sau này làm màn Reset riêng
-    console.log("Reset password requested for:", email || "(no email)");
-  };
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      await requestLoginOtp(trimmed);
+      setStep("ENTER_OTP");
+      setMessage(
+        "We sent a 4-digit code to your email. Please check your inbox (and spam folder)."
+      );
+    } catch (e) {
+      console.error("[LoginScreen] handleSendOtp error:", e);
+      setError(
+        "Failed to send code. Please check your email or contact the office."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyOtp() {
+    const trimmedEmail = email.trim();
+    const trimmedCode = otpCode.trim();
+
+    if (!trimmedEmail || !trimmedCode) {
+      setError("Please enter both email and the 4-digit code.");
+      return;
+    }
+
+    if (trimmedCode.length < 4) {
+      setError("The code must be 4 digits.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const result = await verifyLoginOtp(trimmedEmail, trimmedCode);
+
+      // TODO: nếu sau này dùng JWT, có thể lưu result.accessToken vào AsyncStorage ở đây.
+
+      // 👉 Điều hướng vào Drawer "Main" và truyền staffId + staffName
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: "Main",
+            params: {
+              staffId: result.staffId,
+              staffName: result.staffName,
+              staffEmail: trimmedEmail,
+            },
+          },
+        ],
+      });
+    } catch (e) {
+      console.error("[LoginScreen] handleVerifyOtp error:", e);
+      setError(
+        "Invalid or expired code. Please try again or request a new code."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const isEmailStep = step === "ENTER_EMAIL";
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.select({ ios: "padding", android: undefined })}
-    >
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
+    <View style={styles.container}>
+      <Text style={styles.title}>Blue Angels Care Mobile</Text>
+      <Text style={styles.subtitle}>Sign in with a 4-digit code</Text>
+
+      <TextInput
+        style={styles.input}
+        placeholder="Work email"
+        value={email}
+        onChangeText={setEmail}
+        autoCapitalize="none"
+        keyboardType="email-address"
+      />
+
+      {isEmailStep ? null : (
+        <TextInput
+          style={styles.input}
+          placeholder="4-digit code"
+          value={otpCode}
+          onChangeText={(text) => setOtpCode(text.replace(/[^0-9]/g, ""))}
+          keyboardType="number-pad"
+          maxLength={4}
+        />
+      )}
+
+      {message ? <Text style={styles.message}>{message}</Text> : null}
+      {error ? <Text style={styles.error}>{error}</Text> : null}
+
+      <TouchableOpacity
+        style={styles.button}
+        onPress={isEmailStep ? handleSendOtp : handleVerifyOtp}
+        disabled={loading}
       >
-        <View style={styles.inner}>
-          {/* Logo + App title */}
-          <View style={styles.logoSection}>
-            <Image
-              // Đường dẫn đúng với cấu trúc: /assets/bac-logo.png
-              source={require("../../assets/bac-logo.png")}
-              style={styles.logo}
-              resizeMode="contain"
-            />
-            <Text style={styles.appTitle}>Blue Angels Care</Text>
-            <Text style={styles.appSubtitle}>Mobile DSP Connect</Text>
-          </View>
+        {loading ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>
+            {isEmailStep ? "Send Code" : "Verify & Sign In"}
+          </Text>
+        )}
+      </TouchableOpacity>
 
-          {/* Form */}
-          <View style={styles.form}>
-            {/* Email */}
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="you@example.com"
-              placeholderTextColor="#C7D2FE"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-              value={email}
-              onChangeText={setEmail}
-            />
-
-            {/* Password */}
-            <Text style={[styles.label, { marginTop: 12 }]}>Password</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              placeholderTextColor="#C7D2FE"
-              secureTextEntry
-              value={password}
-              onChangeText={setPassword}
-            />
-
-            {/* Remember Me */}
-            <View style={styles.rememberRow}>
-              <View style={styles.rememberLeft}>
-                <Switch
-                  value={rememberMe}
-                  onValueChange={setRememberMe}
-                  trackColor={{ false: "#1E3A8A", true: "#FACC15" }}
-                  thumbColor="#FFFFFF"
-                />
-                <Text style={styles.rememberLabel}>Remember Me</Text>
-              </View>
-            </View>
-
-            {/* Sign In button */}
-            <TouchableOpacity
-              style={styles.signInButton}
-              onPress={handleSignIn}
-            >
-              <Text style={styles.signInText}>Sign In</Text>
-            </TouchableOpacity>
-
-            {/* Reset Password */}
-            <TouchableOpacity onPress={handleResetPassword}>
-              <Text style={styles.resetText}>Reset Password</Text>
-            </TouchableOpacity>
-
-            {/* Face ID placeholder + version */}
-            <View style={styles.faceIdContainer}>
-              <View style={styles.faceIdIcon}>
-                <Text style={styles.faceIdIconText}>😊</Text>
-              </View>
-              <Text style={styles.versionText}>v1.0.0</Text>
-            </View>
-          </View>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      {!isEmailStep && (
+        <TouchableOpacity
+          style={styles.linkButton}
+          onPress={() => {
+            setStep("ENTER_EMAIL");
+            setOtpCode("");
+            setMessage(null);
+            setError(null);
+          }}
+          disabled={loading}
+        >
+          <Text style={styles.linkText}>Change email / Resend code</Text>
+        </TouchableOpacity>
+      )}
+    </View>
   );
-};
-
-const PRIMARY_BLUE = "#2447D5";
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: PRIMARY_BLUE,
-  },
-  scrollContent: {
-    flexGrow: 1,
-  },
-  inner: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 32,
-    paddingBottom: 32,
-    justifyContent: "flex-start",
-  },
-  logoSection: {
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  logo: {
-    width: 110,
-    height: 110,
-    marginBottom: 8,
-    borderRadius: 24,
-  },
-  appTitle: {
-    fontSize: 22, // nhỏ hơn để nằm trên 1 dòng
-    lineHeight: 26,
-    fontWeight: "800",
-    color: "#FFFFFF",
-    textAlign: "center",
-  },
-  appSubtitle: {
-    marginTop: 2,
-    fontSize: 14,
-    fontWeight: "500",
-    color: "#DBEAFE",
-    textAlign: "center",
-  },
-  form: {
-    marginTop: 10,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#E5E7EB",
-    marginBottom: 4,
-  },
-  input: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#1D4ED8",
-    backgroundColor: "#1E3A8A",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 14,
-    color: "#FFFFFF",
-  },
-  rememberRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 14,
-    marginBottom: 10,
-  },
-  rememberLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  rememberLabel: {
-    marginLeft: 10,
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#F9FAFB",
-  },
-  signInButton: {
-    marginTop: 6,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 999,
-    paddingVertical: 11,
-    alignItems: "center",
-    shadowColor: "#000000",
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 3,
-  },
-  signInText: {
-    fontSize: 16, // giảm nhẹ
-    fontWeight: "700",
-    color: PRIMARY_BLUE,
-  },
-  resetText: {
-    marginTop: 16,
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#FFFFFF",
-    textAlign: "center",
-  },
-  faceIdContainer: {
-    marginTop: 24,
-    alignItems: "center",
-  },
-  faceIdIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
+    backgroundColor: "#0f172a",
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 6,
+    padding: 24,
   },
-  faceIdIconText: {
-    fontSize: 26,
+  title: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#e5e7eb",
+    marginBottom: 8,
   },
-  versionText: {
-    fontSize: 13,
-    color: "#E5E7EB",
+  subtitle: {
+    fontSize: 16,
+    color: "#9ca3af",
+    marginBottom: 24,
+    textAlign: "center",
+  },
+  input: {
+    width: "90%",
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#4b5563",
+    backgroundColor: "#020617",
+    color: "#e5e7eb",
+    borderRadius: 8,
+  },
+  message: {
+    width: "90%",
+    color: "#a5b4fc",
+    marginBottom: 8,
+    fontSize: 14,
+  },
+  error: {
+    width: "90%",
+    color: "#fecaca",
+    marginBottom: 8,
+    fontSize: 14,
+  },
+  button: {
+    marginTop: 10,
+    backgroundColor: "#22c55e",
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    width: "90%",
+    alignItems: "center",
+  },
+  buttonText: {
+    color: "#0f172a",
+    fontSize: 18,
+    fontWeight: "bold",
+  },
+  linkButton: {
+    marginTop: 12,
+  },
+  linkText: {
+    color: "#93c5fd",
+    fontSize: 14,
   },
 });
-
-export default LoginScreen;
-export { LoginScreen };

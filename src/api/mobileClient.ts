@@ -1,22 +1,78 @@
 // src/api/mobileClient.ts
-import type { MobileShift } from "../types/mobileApi";
+import type { MobileShift, MobileLoginResult } from "../types/mobileApi";
 
 /**
- * Địa chỉ backend NestJS (bac-api)
- *  - Local PC: dùng IP v4 lấy từ ipconfig (ví dụ 10.0.0.83)
- *  - PORT mặc định của Nest: 3000
+ * Backend NestJS (bac-api)
+ *  - Local PC: IPv4 từ ipconfig (ví dụ 192.168.12.211)
+ *  - Nest port: 3000
  */
-const BACKEND_BASE_URL = "http://10.0.0.83:3000";
+const BACKEND_BASE_URL = "http://192.168.12.211:3000";
 
 /** Helper: log lỗi từ response */
 async function logAndThrow(res: Response, context: string): Promise<never> {
   const text = await res.text();
   console.error(`[mobileClient] ${context} failed:`, res.status, text);
-  throw new Error(`${context} failed`);
+  throw new Error(`${context} failed: ${res.status}`);
 }
 
 /**
- * Lấy Today’s shifts thật từ bac-api
+ * Gửi OTP login (4 số) tới email DSP
+ */
+export async function requestLoginOtp(email: string): Promise<void> {
+  const url = `${BACKEND_BASE_URL}/mobile/auth/request-otp`;
+
+  const body = { email: email.trim() };
+
+  console.log("[mobileClient] POST requestLoginOtp:", url, body);
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    await logAndThrow(res, "POST /mobile/auth/request-otp");
+  }
+
+  console.log("[mobileClient] requestLoginOtp OK");
+}
+
+/**
+ * Xác thực OTP login
+ */
+export async function verifyLoginOtp(
+  email: string,
+  code: string
+): Promise<MobileLoginResult> {
+  const url = `${BACKEND_BASE_URL}/mobile/auth/verify-otp`;
+
+  const body = {
+    email: email.trim(),
+    code: code.trim(),
+    clientTime: new Date().toISOString(),
+  };
+
+  console.log("[mobileClient] POST verifyLoginOtp:", url, body);
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    await logAndThrow(res, "POST /mobile/auth/verify-otp");
+  }
+
+  const data = (await res.json()) as MobileLoginResult;
+  console.log("[mobileClient] verifyLoginOtp response:", data);
+
+  return data;
+}
+
+/**
+ * Today’s shifts
  */
 export async function getTodayShifts(
   staffId: string,
@@ -40,8 +96,7 @@ export async function getTodayShifts(
 }
 
 /**
- * Check in shift – trả lại JSON từ backend
- *  { status, mode, shiftId, staffId, time, timesheetId }
+ * Check in
  */
 export async function checkInShift(shiftId: string, staffId: string) {
   const url = `${BACKEND_BASE_URL}/mobile/shifts/${encodeURIComponent(
@@ -68,12 +123,11 @@ export async function checkInShift(shiftId: string, staffId: string) {
   const data = await res.json();
   console.log("[mobileClient] Check-in response:", data);
 
-  // 🔴 QUAN TRỌNG: phải return data để HomeScreen dùng
   return data;
 }
 
 /**
- * Check out shift – trả lại JSON từ backend
+ * Check out
  */
 export async function checkOutShift(shiftId: string, staffId: string) {
   const url = `${BACKEND_BASE_URL}/mobile/shifts/${encodeURIComponent(

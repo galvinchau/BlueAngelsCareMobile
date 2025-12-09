@@ -1,6 +1,6 @@
 // src/types/mobileApi.ts
 
-export type MobileShiftStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
+export type MobileShiftStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
 
 export interface MobileShift {
   id: string;
@@ -76,4 +76,20 @@ export interface TimesheetEntry {
 export interface CheckInOutResponse {
   shift: MobileShift;
   timesheet?: TimesheetEntry;
+}
+// ==== Auth / Login types ====
+
+export interface MobileLoginResult {
+  token: string; // JWT hoặc access token từ API
+  staffId: string; // id của DSP (staff)
+  staffName: string; // tên DSP để hiển thị trên màn hình
+}
+// src/types/mobileApi.ts
+
+// ... giữ nguyên các type ở trên ...
+
+export interface MobileLoginResult {
+  staffId: string;
+  staffName: string;
+  accessToken?: string;
 }
