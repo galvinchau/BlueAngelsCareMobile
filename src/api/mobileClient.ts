@@ -1,5 +1,9 @@
 // src/api/mobileClient.ts
-import type { MobileShift, MobileLoginResult } from "../types/mobileApi";
+import type {
+  MobileShift,
+  MobileLoginResult,
+  MobileDailyNotePayload,
+} from "../types/mobileApi";
 
 /**
  * Backend NestJS (bac-api)
@@ -153,6 +157,37 @@ export async function checkOutShift(shiftId: string, staffId: string) {
 
   const data = await res.json();
   console.log("[mobileClient] Check-out response:", data);
+
+  return data;
+}
+
+/**
+ * Submit Daily Note (gọi NestJS /mobile/daily-notes)
+ *  - payload được build ở DailyNoteScreen.tsx
+ */
+export async function submitDailyNote(
+  payload: MobileDailyNotePayload
+): Promise<{ ok: boolean; dailyNoteId?: string; shift?: MobileShift }> {
+  const url = `${BACKEND_BASE_URL}/mobile/daily-notes`;
+
+  console.log(
+    "[mobileClient] POST submitDailyNote:",
+    url,
+    JSON.stringify(payload)
+  );
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    await logAndThrow(res, "POST /mobile/daily-notes");
+  }
+
+  const data = await res.json();
+  console.log("[mobileClient] submitDailyNote response:", data);
 
   return data;
 }

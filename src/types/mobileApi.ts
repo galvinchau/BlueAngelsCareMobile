@@ -23,40 +23,61 @@ export interface MobileShift {
 }
 
 export interface MobileDailyNotePayload {
+  // IDs
   shiftId: string;
   staffId: string;
   individualId: string;
 
+  // Staff info
+  staffName?: string;
+  staffEmail?: string;
+
+  // Individual info
   date: string;
   individualName: string;
   individualDob?: string;
   individualMa?: string;
   individualAddress?: string;
 
+  // Service info
   serviceCode: string;
   serviceName: string;
   scheduleStart: string;
   scheduleEnd: string;
   outcomeText?: string;
 
+  // Visit info
   visitStart?: string;
   visitEnd?: string;
 
+  // Service notes
   todayPlan?: string;
   whatWeWorkedOn?: string;
   opportunities?: string;
   notes?: string;
 
+  // Mileage & cancel
+  mileage?: number;
+  isCanceled?: boolean;
+  cancelReason?: string;
+
+  // Meals
   meals?: {
     breakfast?: { time?: string; had?: string; offered?: string };
     lunch?: { time?: string; had?: string; offered?: string };
     dinner?: { time?: string; had?: string; offered?: string };
   };
 
+  // Health / incident
   healthNotes?: string;
   incidentNotes?: string;
 
-  staffName?: string;
+  // Signatures (base64)
+  dspSignature?: string | null;
+  individualSignature?: string | null;
+
+  // Extra fields nếu cần cho template / DB
+  staffNameForCertifyText?: string;
   certifyText?: string;
 }
 
@@ -77,19 +98,12 @@ export interface CheckInOutResponse {
   shift: MobileShift;
   timesheet?: TimesheetEntry;
 }
+
 // ==== Auth / Login types ====
-
-export interface MobileLoginResult {
-  token: string; // JWT hoặc access token từ API
-  staffId: string; // id của DSP (staff)
-  staffName: string; // tên DSP để hiển thị trên màn hình
-}
-// src/types/mobileApi.ts
-
-// ... giữ nguyên các type ở trên ...
-
+// Gộp về một interface duy nhất cho tiện dùng
 export interface MobileLoginResult {
   staffId: string;
   staffName: string;
+  token?: string;
   accessToken?: string;
 }
