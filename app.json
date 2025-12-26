@@ -12,10 +12,18 @@
     },
     "ios": {
       "bundleIdentifier": "org.blueangelscare.mobile",
-      "supportsTablet": false
+      "supportsTablet": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "org.blueangelscare.mobile"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "daffae30-51d9-482b-bde2-e91a65d7c160"
+      }
     }
   }
 }

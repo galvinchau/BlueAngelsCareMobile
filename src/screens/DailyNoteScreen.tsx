@@ -43,6 +43,52 @@ type MealInfo = {
   offered: string;
 };
 
+/**
+ * Return YYYY-MM-DD based on device local time (Pennsylvania)
+ * (Avoid UTC date shift when using toISOString().slice(0,10))
+ */
+function getLocalDateYYYYMMDD(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Convert server HH:mm (assumed UTC) to local HH:mm for display
+ * Example: phone 12:45 (PA) but server returns 17:45 => show 12:45
+ *
+ * - If value looks like ISO (contains 'T') we just return as-is.
+ * - If value is HH:mm, we treat it as UTC time for the given dateStr, then convert to device local.
+ */
+function formatVisitTimeForDisplay(
+  dateStr: string | undefined,
+  value: string | null | undefined
+): string {
+  if (!value) return "—";
+
+  const v = String(value);
+
+  // If backend already sends ISO or something complex, don't touch it
+  if (v.includes("T")) return v;
+
+  // If not HH:mm, don't touch
+  const m = /^(\d{2}):(\d{2})$/.exec(v);
+  if (!m) return v;
+
+  // Need date to convert; if missing, just return v
+  if (!dateStr) return v;
+
+  // Treat as UTC: YYYY-MM-DDTHH:mm:00Z
+  const isoUtc = `${dateStr}T${v}:00Z`;
+  const dt = new Date(isoUtc);
+  if (Number.isNaN(dt.getTime())) return v;
+
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mm = String(dt.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const params = route?.params ?? {};
 
@@ -135,7 +181,8 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     setErrorMessage(null);
 
     try {
-      const todayStr = new Date().toISOString().slice(0, 10); // yyyy-mm-dd
+      // IMPORTANT: local date (PA), not UTC
+      const todayStr = getLocalDateYYYYMMDD(); // yyyy-mm-dd (local)
       const shifts = await getTodayShifts(staffId, todayStr);
 
       console.log(
@@ -292,6 +339,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       scheduleStart: shift.scheduleStart,
       scheduleEnd: shift.scheduleEnd,
 
+      // keep raw values (backend expects what it returned)
       visitStart: shift.visitStart ?? undefined,
       visitEnd: shift.visitEnd ?? undefined,
 
@@ -431,12 +479,16 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
 
           <View style={styles.row}>
             <Text style={styles.label}>Check-in</Text>
-            <Text style={styles.value}>{shift?.visitStart ?? "—"}</Text>
+            <Text style={styles.value}>
+              {formatVisitTimeForDisplay(shift?.date, shift?.visitStart)}
+            </Text>
           </View>
 
           <View style={styles.row}>
             <Text style={styles.label}>Check-out</Text>
-            <Text style={styles.value}>{shift?.visitEnd ?? "—"}</Text>
+            <Text style={styles.value}>
+              {formatVisitTimeForDisplay(shift?.date, shift?.visitEnd)}
+            </Text>
           </View>
 
           <View style={styles.row}>
@@ -648,7 +700,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
                 setDspSignatureError(null);
               }}
               onEnd={() => {
-                // khi nhấc tay khỏi màn hình, đọc signature → kích hoạt onOK
                 setDspSignatureError(null);
                 dspSignatureRef.current?.readSignature();
               }}
