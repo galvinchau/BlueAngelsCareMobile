@@ -1,5 +1,5 @@
 // src/screens/HomeScreen.tsx
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -17,6 +17,17 @@ import type { MainDrawerParamList, RootStackParamList } from "../../App";
 import type { MobileShift } from "../types/mobileApi";
 import { getTodayShifts } from "../api/mobileClient";
 
+/**
+ * Return YYYY-MM-DD based on device local time (Pennsylvania)
+ * (Avoid UTC date shift when using toISOString().slice(0,10))
+ */
+function getLocalDateYYYYMMDD(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 type HomeScreenProps = NativeStackScreenProps<
   MainDrawerParamList & RootStackParamList,
   "Visits"
@@ -30,7 +41,8 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
   const [shifts, setShifts] = useState<MobileShift[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  // ✅ IMPORTANT: local date, not UTC
+  const todayStr = useMemo(() => getLocalDateYYYYMMDD(), []);
 
   // Load today's shifts mỗi lần màn hình được focus
   useFocusEffect(
@@ -71,6 +83,23 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     }, [staffId, todayStr])
   );
 
+  function openShiftDailyNote(shiftId: string) {
+    if (!staffId) {
+      Alert.alert(
+        "Missing staff info",
+        "Cannot open Daily Note because staff information is missing."
+      );
+      return;
+    }
+
+    navigation.navigate("DailyNote", {
+      shiftId,
+      staffId,
+      staffName,
+      staffEmail,
+    });
+  }
+
   function handleOpenDailyNote() {
     if (!staffId) {
       Alert.alert(
@@ -89,13 +118,7 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     }
 
     const firstShift = shifts[0];
-
-    navigation.navigate("DailyNote", {
-      shiftId: firstShift.id,
-      staffId,
-      staffName,
-      staffEmail,
-    });
+    openShiftDailyNote(firstShift.id);
   }
 
   function handleOpenMenu() {
@@ -151,12 +174,35 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
               <Text style={styles.summaryHighlight}>{shifts.length}</Text> shift
               {shifts.length > 1 ? "s" : ""} today.
             </Text>
+
             {nextShift && (
               <Text style={styles.nextShiftText}>
                 Next shift: {nextShift.serviceName} • {nextShift.scheduleStart}{" "}
                 – {nextShift.scheduleEnd}
               </Text>
             )}
+
+            {/* ✅ NEW: list all shifts */}
+            <View style={styles.shiftList}>
+              {shifts.map((s) => (
+                <TouchableOpacity
+                  key={s.id}
+                  style={styles.shiftRow}
+                  onPress={() => openShiftDailyNote(s.id)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.shiftTitle}>
+                      {s.individualName ?? "Individual"} •{" "}
+                      {s.serviceName ?? "Service"}
+                    </Text>
+                    <Text style={styles.shiftSub}>
+                      {s.scheduleStart} – {s.scheduleEnd}
+                    </Text>
+                  </View>
+                  <Text style={styles.shiftAction}>Open</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </>
         )}
       </View>
@@ -275,6 +321,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#a5b4fc",
     marginTop: 4,
+  },
+  shiftList: {
+    marginTop: 12,
+    gap: 8,
+  },
+  shiftRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#1f2937",
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: "#0b1120",
+  },
+  shiftTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#e5e7eb",
+  },
+  shiftSub: {
+    fontSize: 13,
+    color: "#9ca3af",
+    marginTop: 2,
+  },
+  shiftAction: {
+    color: "#93c5fd",
+    fontSize: 13,
+    fontWeight: "700",
+    marginLeft: 12,
   },
   primaryButton: {
     width: "100%",

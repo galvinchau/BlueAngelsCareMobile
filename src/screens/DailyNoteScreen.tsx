@@ -43,6 +43,8 @@ type MealInfo = {
   offered: string;
 };
 
+const TZ = "America/New_York";
+
 /**
  * Return YYYY-MM-DD based on device local time (Pennsylvania)
  * (Avoid UTC date shift when using toISOString().slice(0,10))
@@ -55,38 +57,78 @@ function getLocalDateYYYYMMDD(d = new Date()): string {
 }
 
 /**
- * Convert server HH:mm (assumed UTC) to local HH:mm for display
- * Example: phone 12:45 (PA) but server returns 17:45 => show 12:45
- *
- * - If value looks like ISO (contains 'T') we just return as-is.
- * - If value is HH:mm, we treat it as UTC time for the given dateStr, then convert to device local.
+ * Format Date -> HH:mm in America/New_York
+ */
+function formatHHmmInTZ(d: Date, timeZone = TZ): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    }).formatToParts(d);
+
+    const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+    const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
+    return `${hh}:${mm}`;
+  } catch {
+    // fallback: device local
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+}
+
+/**
+ * Display visit time safely:
+ * - If value is HH:mm => display as-is (DO NOT treat as UTC)
+ * - If value is ISO string => convert to America/New_York HH:mm
  */
 function formatVisitTimeForDisplay(
-  dateStr: string | undefined,
+  _dateStr: string | undefined,
   value: string | null | undefined
 ): string {
   if (!value) return "—";
 
-  const v = String(value);
+  const v = String(value).trim();
 
-  // If backend already sends ISO or something complex, don't touch it
-  if (v.includes("T")) return v;
+  // HH:mm -> display directly (this is the key fix)
+  const m = /^(\d{1,2}):(\d{2})$/.exec(v);
+  if (m) {
+    const hh = String(Number(m[1])).padStart(2, "0");
+    const mm = String(Number(m[2])).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
 
-  // If not HH:mm, don't touch
-  const m = /^(\d{2}):(\d{2})$/.exec(v);
-  if (!m) return v;
+  // ISO -> convert to TZ
+  if (v.includes("T")) {
+    const dt = new Date(v);
+    if (!Number.isNaN(dt.getTime())) return formatHHmmInTZ(dt, TZ);
+  }
 
-  // Need date to convert; if missing, just return v
-  if (!dateStr) return v;
+  // otherwise show raw
+  return v;
+}
 
-  // Treat as UTC: YYYY-MM-DDTHH:mm:00Z
-  const isoUtc = `${dateStr}T${v}:00Z`;
-  const dt = new Date(isoUtc);
-  if (Number.isNaN(dt.getTime())) return v;
+function parseHHmmToMinutes(v?: string | null | undefined): number | null {
+  if (!v) return null;
+  const s = String(v).trim();
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
+}
 
-  const hh = String(dt.getHours()).padStart(2, "0");
-  const mm = String(dt.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
+/**
+ * abs diff in minutes with wrap-around (handle overnight safely)
+ * ex: 23:55 vs 00:05 => 10 minutes
+ */
+function absDiffMinutesWrap(a: number, b: number): number {
+  const diff = Math.abs(a - b);
+  return Math.min(diff, 24 * 60 - diff);
 }
 
 const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
@@ -114,6 +156,9 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const [mileage, setMileage] = useState("");
   const [isCanceled, setIsCanceled] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+
+  // ✅ NEW: variance reason (single field for IN/OUT 15+ minutes early/late)
+  const [varianceReason, setVarianceReason] = useState("");
 
   const [meals, setMeals] = useState<{
     breakfast: MealInfo;
@@ -227,6 +272,53 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   }, [staffId, routeShiftId]);
 
   // ------------------------------------------------------------
+  // Cancel mode behavior: lock fields + clear variance reason
+  // ------------------------------------------------------------
+  useEffect(() => {
+    if (isCanceled) {
+      // cancel mode: variance reason not used
+      setVarianceReason("");
+    }
+  }, [isCanceled]);
+
+  // ------------------------------------------------------------
+  //  Compute variance requirement (>= 15 minutes early/late)
+  // ------------------------------------------------------------
+  const needsVarianceReason = useMemo(() => {
+    if (!shift) return false;
+    if (isCanceled) return false; // cancel doesn't use variance
+
+    // only evaluate when we have both schedule and visit times
+    const schedStartMin = parseHHmmToMinutes(shift.scheduleStart);
+    const schedEndMin = parseHHmmToMinutes(shift.scheduleEnd);
+
+    // visitStart/visitEnd may be HH:mm or ISO
+    const visitStartHHmm = shift.visitStart
+      ? formatVisitTimeForDisplay(shift.date, shift.visitStart)
+      : null;
+    const visitEndHHmm = shift.visitEnd
+      ? formatVisitTimeForDisplay(shift.date, shift.visitEnd)
+      : null;
+
+    const visitStartMin = parseHHmmToMinutes(visitStartHHmm || undefined);
+    const visitEndMin = parseHHmmToMinutes(visitEndHHmm || undefined);
+
+    if (
+      schedStartMin === null ||
+      schedEndMin === null ||
+      visitStartMin === null ||
+      visitEndMin === null
+    ) {
+      return false;
+    }
+
+    const diffIn = absDiffMinutesWrap(visitStartMin, schedStartMin);
+    const diffOut = absDiffMinutesWrap(visitEndMin, schedEndMin);
+
+    return diffIn >= 15 || diffOut >= 15;
+  }, [shift, isCanceled]);
+
+  // ------------------------------------------------------------
   //  Check-in / Check-out handlers
   // ------------------------------------------------------------
   async function handleCheckIn() {
@@ -234,6 +326,11 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       Alert.alert("Daily Note", "Missing shift or staff information.");
       return;
     }
+    if (isCanceled) {
+      Alert.alert("Daily Note", "This shift is marked as cancelled.");
+      return;
+    }
+
     setCheckinLoading(true);
     setErrorMessage(null);
     setStatusMessage(null);
@@ -257,6 +354,11 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       Alert.alert("Daily Note", "Missing shift or staff information.");
       return;
     }
+    if (isCanceled) {
+      Alert.alert("Daily Note", "This shift is marked as cancelled.");
+      return;
+    }
+
     setCheckoutLoading(true);
     setErrorMessage(null);
     setStatusMessage(null);
@@ -284,25 +386,45 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       return;
     }
 
-    if (!shift.visitStart || !shift.visitEnd) {
-      Alert.alert(
-        "Daily Note",
-        "Please check in and check out before submitting the Daily Note."
-      );
-      return;
+    // ✅ If NOT canceled, require check-in/out
+    if (!isCanceled) {
+      if (!shift.visitStart || !shift.visitEnd) {
+        Alert.alert(
+          "Daily Note",
+          "Please check in and check out before submitting the Daily Note."
+        );
+        return;
+      }
     }
 
+    // ✅ Cancel reason required when canceled
     if (isCanceled && !cancelReason.trim()) {
       Alert.alert("Daily Note", "Please enter a cancel reason.");
       return;
     }
 
-    if (!todayPlan.trim() && !whatWeWorkedOn.trim() && !opportunities.trim()) {
+    // ✅ Variance reason required when 15+ minutes early/late
+    if (!isCanceled && needsVarianceReason && !varianceReason.trim()) {
       Alert.alert(
         "Daily Note",
-        "Please enter at least one service note (today's plan / what you worked on / opportunities)."
+        "Please explain why check-in/check-out time differs by 15 minutes or more."
       );
       return;
+    }
+
+    // ✅ Service notes requirement only when NOT canceled
+    if (!isCanceled) {
+      if (
+        !todayPlan.trim() &&
+        !whatWeWorkedOn.trim() &&
+        !opportunities.trim()
+      ) {
+        Alert.alert(
+          "Daily Note",
+          "Please enter at least one service note (today's plan / what you worked on / opportunities)."
+        );
+        return;
+      }
     }
 
     if (!dspSignature) {
@@ -321,7 +443,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     setDspSignatureError(null);
     setIndividualSignatureError(null);
 
-    const payload: MobileDailyNotePayload = {
+    const payload: MobileDailyNotePayload & { varianceReason?: string } = {
       shiftId: shift.id,
       staffId,
       staffName,
@@ -347,18 +469,32 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       isCanceled,
       cancelReason: isCanceled ? cancelReason.trim() : undefined,
 
-      todayPlan: todayPlan.trim() || undefined,
-      whatWeWorkedOn: whatWeWorkedOn.trim() || undefined,
-      opportunities: opportunities.trim() || undefined,
+      // ✅ variance reason (single field)
+      varianceReason:
+        !isCanceled && needsVarianceReason ? varianceReason.trim() : undefined,
 
-      healthNotes: healthNotes.trim() || undefined,
-      incidentNotes: incidentNotes.trim() || undefined,
+      // ✅ notes only when not canceled
+      todayPlan: !isCanceled ? todayPlan.trim() || undefined : undefined,
+      whatWeWorkedOn: !isCanceled
+        ? whatWeWorkedOn.trim() || undefined
+        : undefined,
+      opportunities: !isCanceled
+        ? opportunities.trim() || undefined
+        : undefined,
 
-      meals: {
-        breakfast: { ...meals.breakfast },
-        lunch: { ...meals.lunch },
-        dinner: { ...meals.dinner },
-      },
+      healthNotes: !isCanceled ? healthNotes.trim() || undefined : undefined,
+      incidentNotes: !isCanceled
+        ? incidentNotes.trim() || undefined
+        : undefined,
+
+      // ✅ meals disabled when canceled
+      meals: !isCanceled
+        ? {
+            breakfast: { ...meals.breakfast },
+            lunch: { ...meals.lunch },
+            dinner: { ...meals.dinner },
+          }
+        : undefined,
 
       dspSignature: dspSignature,
       individualSignature: individualSignature,
@@ -367,7 +503,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     console.log("[DailyNoteScreen] submit payload:", payload);
 
     try {
-      const res = await submitDailyNote(payload);
+      const res = await submitDailyNote(payload as any);
       console.log("[DailyNoteScreen] submitDailyNote result:", res);
 
       Alert.alert(
@@ -408,8 +544,10 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     }));
   }
 
-  const canCheckIn = !!shift && shift.status === "NOT_STARTED" && !loadingShift;
-  const canCheckOut = !!shift && shift.status !== "COMPLETED" && !loadingShift;
+  const canCheckIn =
+    !!shift && shift.status === "NOT_STARTED" && !loadingShift && !isCanceled;
+  const canCheckOut =
+    !!shift && shift.status !== "COMPLETED" && !loadingShift && !isCanceled;
 
   const signatureWebStyle = `
     .m-signature-pad--footer { display: none; margin: 0px; }
@@ -425,6 +563,8 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       border-radius: 12px;
     }
   `;
+
+  const disabledSectionStyle = isCanceled ? { opacity: 0.45 } : null;
 
   // ------------------------------------------------------------
   //  Render
@@ -539,67 +679,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           <Text style={styles.errorMessage}>{errorMessage}</Text>
         ) : null}
 
-        {/* Service Notes */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Service Notes</Text>
-
-          <Text style={styles.fieldLabel}>Today&apos;s plan</Text>
-          <TextInput
-            style={styles.textArea}
-            multiline
-            value={todayPlan}
-            onChangeText={setTodayPlan}
-            placeholder="What was the plan for today based on the ISP outcome?"
-            placeholderTextColor="#6b7280"
-          />
-
-          <Text style={styles.fieldLabel}>What we worked on</Text>
-          <TextInput
-            style={styles.textArea}
-            multiline
-            value={whatWeWorkedOn}
-            onChangeText={setWhatWeWorkedOn}
-            placeholder="Describe the supports provided and what the individual worked on."
-            placeholderTextColor="#6b7280"
-          />
-
-          <Text style={styles.fieldLabel}>Opportunities & community</Text>
-          <TextInput
-            style={styles.textArea}
-            multiline
-            value={opportunities}
-            onChangeText={setOpportunities}
-            placeholder="What opportunities were offered? How did you support community participation?"
-            placeholderTextColor="#6b7280"
-          />
-        </View>
-
-        {/* Health & incident notes */}
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Health & Incident</Text>
-
-          <Text style={styles.fieldLabel}>Health / behavior notes</Text>
-          <TextInput
-            style={styles.textArea}
-            multiline
-            value={healthNotes}
-            onChangeText={setHealthNotes}
-            placeholder="Any changes in health, mood, or behavior today?"
-            placeholderTextColor="#6b7280"
-          />
-
-          <Text style={styles.fieldLabel}>Incident notes</Text>
-          <TextInput
-            style={styles.textArea}
-            multiline
-            value={incidentNotes}
-            onChangeText={setIncidentNotes}
-            placeholder="Describe any incidents, restraints, or unusual events (if any)."
-            placeholderTextColor="#6b7280"
-          />
-        </View>
-
-        {/* Mileage + Cancel */}
+        {/* Mileage + Cancel + Variance */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Mileage & Cancel</Text>
 
@@ -611,6 +691,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
             onChangeText={setMileage}
             placeholder="0"
             placeholderTextColor="#6b7280"
+            editable={!isCanceled}
           />
 
           <View style={styles.switchRow}>
@@ -636,10 +717,91 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
               />
             </>
           )}
+
+          {!isCanceled && needsVarianceReason && (
+            <>
+              <Text style={styles.fieldLabel}>
+                Reason (15+ minutes early/late)
+              </Text>
+              <TextInput
+                style={styles.textArea}
+                multiline
+                value={varianceReason}
+                onChangeText={setVarianceReason}
+                placeholder="Explain why check-in/check-out differs by 15 minutes or more."
+                placeholderTextColor="#6b7280"
+              />
+            </>
+          )}
+        </View>
+
+        {/* Service Notes */}
+        <View style={[styles.card, disabledSectionStyle]}>
+          <Text style={styles.sectionTitle}>Service Notes</Text>
+
+          <Text style={styles.fieldLabel}>Today&apos;s plan</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            value={todayPlan}
+            onChangeText={setTodayPlan}
+            placeholder="What was the plan for today based on the ISP outcome?"
+            placeholderTextColor="#6b7280"
+            editable={!isCanceled}
+          />
+
+          <Text style={styles.fieldLabel}>What we worked on</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            value={whatWeWorkedOn}
+            onChangeText={setWhatWeWorkedOn}
+            placeholder="Describe the supports provided and what the individual worked on."
+            placeholderTextColor="#6b7280"
+            editable={!isCanceled}
+          />
+
+          <Text style={styles.fieldLabel}>Opportunities & community</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            value={opportunities}
+            onChangeText={setOpportunities}
+            placeholder="What opportunities were offered? How did you support community participation?"
+            placeholderTextColor="#6b7280"
+            editable={!isCanceled}
+          />
+        </View>
+
+        {/* Health & incident notes */}
+        <View style={[styles.card, disabledSectionStyle]}>
+          <Text style={styles.sectionTitle}>Health & Incident</Text>
+
+          <Text style={styles.fieldLabel}>Health / behavior notes</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            value={healthNotes}
+            onChangeText={setHealthNotes}
+            placeholder="Any changes in health, mood, or behavior today?"
+            placeholderTextColor="#6b7280"
+            editable={!isCanceled}
+          />
+
+          <Text style={styles.fieldLabel}>Incident notes</Text>
+          <TextInput
+            style={styles.textArea}
+            multiline
+            value={incidentNotes}
+            onChangeText={setIncidentNotes}
+            placeholder="Describe any incidents, restraints, or unusual events (if any)."
+            placeholderTextColor="#6b7280"
+            editable={!isCanceled}
+          />
         </View>
 
         {/* Meals */}
-        <View style={styles.card}>
+        <View style={[styles.card, disabledSectionStyle]}>
           <Text style={styles.sectionTitle}>Meals</Text>
 
           {(["breakfast", "lunch", "dinner"] as const).map((mealKey) => (
@@ -659,6 +821,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
                 onChangeText={(val) => updateMeal(mealKey, "time", val)}
                 placeholder="e.g. 08:00"
                 placeholderTextColor="#6b7280"
+                editable={!isCanceled}
               />
 
               <Text style={styles.fieldLabel}>
@@ -671,6 +834,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
                 onChangeText={(val) => updateMeal(mealKey, "had", val)}
                 placeholder="Food / drink actually consumed."
                 placeholderTextColor="#6b7280"
+                editable={!isCanceled}
               />
 
               <Text style={styles.fieldLabel}>What was offered?</Text>
@@ -681,6 +845,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
                 onChangeText={(val) => updateMeal(mealKey, "offered", val)}
                 placeholder="Options that were offered."
                 placeholderTextColor="#6b7280"
+                editable={!isCanceled}
               />
             </View>
           ))}
