@@ -1,6 +1,12 @@
 // App.tsx
-import React from "react";
-import { StyleSheet, View, Pressable, Text } from "react-native";
+import React, { useEffect, useState } from "react";
+import {
+  StyleSheet,
+  View,
+  Pressable,
+  Text,
+  ActivityIndicator,
+} from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import {
   createNativeStackNavigator,
@@ -18,6 +24,10 @@ import ClientsScreen from "./src/screens/ClientsScreen";
 import ClientDetailScreen from "./src/screens/ClientDetailScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import HelpScreen from "./src/screens/HelpScreen";
+
+// NEW: auto-login helpers
+import { getRefreshToken } from "./src/auth/authStorage";
+import { refreshLogin } from "./src/api/mobileAuthApi";
 
 // =======================
 // Root Stack types
@@ -111,7 +121,6 @@ function ClientsStackNavigator() {
           headerLeft: () => (
             <DrawerHamburger
               onPress={() => {
-                // parent of ClientsStack is Drawer
                 const parent = navigation.getParent();
                 // @ts-ignore - toggleDrawer exists on drawer navigation
                 parent?.toggleDrawer?.();
@@ -195,15 +204,75 @@ function MainDrawerNavigator({ route }: MainDrawerNavProps) {
 // Root App
 // =======================
 export default function App() {
+  const [booting, setBooting] = useState(true);
+  const [initialRoute, setInitialRoute] = useState<"Login" | "Main">("Login");
+  const [initialParams, setInitialParams] = useState<
+    RootStackParamList["Main"] | undefined
+  >(undefined);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function bootstrap() {
+      try {
+        const token = await getRefreshToken();
+
+        if (!token) {
+          if (!mounted) return;
+          setInitialRoute("Login");
+          setInitialParams(undefined);
+          return;
+        }
+
+        // try refresh
+        const data = await refreshLogin(token);
+
+        if (!mounted) return;
+        setInitialRoute("Main");
+        setInitialParams({
+          staffId: data.staffId,
+          staffName: data.staffName,
+          staffEmail: data.email,
+        });
+      } catch {
+        if (!mounted) return;
+        // refresh failed -> force login with OTP
+        setInitialRoute("Login");
+        setInitialParams(undefined);
+      } finally {
+        if (!mounted) return;
+        setBooting(false);
+      }
+    }
+
+    bootstrap();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (booting) {
+    return (
+      <View style={[styles.container, styles.boot]}>
+        <ActivityIndicator size="large" />
+        <Text style={styles.bootText}>Signing you in...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <NavigationContainer>
         <RootStack.Navigator
-          initialRouteName="Login"
+          initialRouteName={initialRoute}
           screenOptions={{ headerShown: false }}
         >
           <RootStack.Screen name="Login" component={LoginScreen} />
-          <RootStack.Screen name="Main" component={MainDrawerNavigator} />
+          <RootStack.Screen
+            name="Main"
+            component={MainDrawerNavigator}
+            initialParams={initialParams}
+          />
         </RootStack.Navigator>
       </NavigationContainer>
     </View>
@@ -212,6 +281,17 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+
+  boot: {
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 10,
+  },
+  bootText: {
+    fontSize: 14,
+    fontWeight: "700",
+    opacity: 0.7,
+  },
 
   hamburgerBtn: {
     marginLeft: 12,

@@ -1,5 +1,5 @@
 // src/screens/LoginScreen.tsx
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -8,20 +8,107 @@ import {
   TouchableOpacity,
   ActivityIndicator,
 } from "react-native";
-import { requestLoginOtp, verifyLoginOtp } from "../api/mobileClient";
+
+import { requestOtp, verifyOtp, refreshLogin } from "../api/mobileAuthApi";
+import {
+  getRefreshToken,
+  getStaffInfo,
+  clearAuthStorage,
+} from "../auth/authStorage";
 
 type LoginStep = "ENTER_EMAIL" | "ENTER_OTP";
+
+function isHttpError401_403_400(msg: string) {
+  return (
+    msg.includes("HTTP 401") ||
+    msg.includes("HTTP 403") ||
+    msg.includes("HTTP 400")
+  );
+}
 
 export default function LoginScreen({ navigation }: any) {
   const [email, setEmail] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [step, setStep] = useState<LoginStep>("ENTER_EMAIL");
   const [loading, setLoading] = useState(false);
+
+  // Auto-login boot
+  const [booting, setBooting] = useState(true);
+  const [autoLoginError, setAutoLoginError] = useState<string | null>(null);
+
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  async function tryAutoLogin() {
+    setAutoLoginError(null);
+
+    const token = await getRefreshToken();
+    const staff = await getStaffInfo();
+
+    console.log("[LoginScreen] SecureStore token exists?", !!token);
+    console.log("[LoginScreen] SecureStore staff:", staff);
+
+    // Prefill email (nice UX)
+    if (staff?.email) setEmail(staff.email);
+
+    if (!token) return false;
+
+    try {
+      const data = await refreshLogin(token);
+      console.log("[LoginScreen] refreshLogin OK:", data);
+
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: "Main",
+            params: {
+              staffId: data.staffId,
+              staffName: data.staffName,
+              staffEmail: data.email,
+            },
+          },
+        ],
+      });
+
+      return true;
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      console.error("[LoginScreen] refreshLogin FAILED:", msg);
+
+      // ✅ Only clear token when server says invalid/expired
+      // ❌ If network error, DO NOT clear token
+      if (isHttpError401_403_400(msg)) {
+        console.log("[LoginScreen] token invalid -> clearing storage");
+        await clearAuthStorage();
+      } else {
+        console.log("[LoginScreen] network/unknown -> keep token, allow retry");
+      }
+
+      setAutoLoginError(msg);
+      return false;
+    }
+  }
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        await tryAutoLogin();
+      } finally {
+        if (alive) setBooting(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handleSendOtp() {
-    const trimmed = email.trim();
+    const trimmed = email.trim().toLowerCase();
 
     if (!trimmed) {
       setError("Please enter your email.");
@@ -33,15 +120,16 @@ export default function LoginScreen({ navigation }: any) {
     setMessage(null);
 
     try {
-      await requestLoginOtp(trimmed);
+      await requestOtp(trimmed);
       setStep("ENTER_OTP");
       setMessage(
         "We sent a 4-digit code to your email. Please check your inbox (and spam folder)."
       );
-    } catch (e) {
-      console.error("[LoginScreen] handleSendOtp error:", e);
+    } catch (e: any) {
+      console.error("[LoginScreen] handleSendOtp error:", e?.message || e);
       setError(
-        "Failed to send code. Please check your email or contact the office."
+        e?.message ||
+          "Failed to send code. Please check your email or contact the office."
       );
     } finally {
       setLoading(false);
@@ -49,7 +137,7 @@ export default function LoginScreen({ navigation }: any) {
   }
 
   async function handleVerifyOtp() {
-    const trimmedEmail = email.trim();
+    const trimmedEmail = email.trim().toLowerCase();
     const trimmedCode = otpCode.trim();
 
     if (!trimmedEmail || !trimmedCode) {
@@ -67,11 +155,8 @@ export default function LoginScreen({ navigation }: any) {
     setMessage(null);
 
     try {
-      const result = await verifyLoginOtp(trimmedEmail, trimmedCode);
+      const result = await verifyOtp(trimmedEmail, trimmedCode);
 
-      // TODO: nếu sau này dùng JWT, có thể lưu result.accessToken vào AsyncStorage ở đây.
-
-      // 👉 Điều hướng vào Drawer "Main" và truyền staffId + staffName
       navigation.reset({
         index: 0,
         routes: [
@@ -80,15 +165,16 @@ export default function LoginScreen({ navigation }: any) {
             params: {
               staffId: result.staffId,
               staffName: result.staffName,
-              staffEmail: trimmedEmail,
+              staffEmail: result.email || trimmedEmail,
             },
           },
         ],
       });
-    } catch (e) {
-      console.error("[LoginScreen] handleVerifyOtp error:", e);
+    } catch (e: any) {
+      console.error("[LoginScreen] handleVerifyOtp error:", e?.message || e);
       setError(
-        "Invalid or expired code. Please try again or request a new code."
+        e?.message ||
+          "Invalid or expired code. Please try again or request a new code."
       );
     } finally {
       setLoading(false);
@@ -97,10 +183,56 @@ export default function LoginScreen({ navigation }: any) {
 
   const isEmailStep = step === "ENTER_EMAIL";
 
+  // Boot screen
+  if (booting) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>Blue Angels Care Mobile</Text>
+        <Text style={styles.subtitle}>Signing you in...</Text>
+        <ActivityIndicator color="#fff" />
+
+        {autoLoginError ? (
+          <>
+            <Text style={[styles.error, { marginTop: 12 }]}>
+              Auto login failed: {autoLoginError}
+            </Text>
+
+            <TouchableOpacity
+              style={[styles.button, { marginTop: 14 }]}
+              onPress={async () => {
+                setBooting(true);
+                try {
+                  await tryAutoLogin();
+                } finally {
+                  setBooting(false);
+                }
+              }}
+            >
+              <Text style={styles.buttonText}>Retry Auto Login</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.linkButton}
+              onPress={() => setBooting(false)}
+            >
+              <Text style={styles.linkText}>Continue to Login</Text>
+            </TouchableOpacity>
+          </>
+        ) : null}
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Blue Angels Care Mobile</Text>
       <Text style={styles.subtitle}>Sign in with a 4-digit code</Text>
+
+      {autoLoginError ? (
+        <Text style={styles.message}>
+          Auto login failed earlier. You can login again with OTP.
+        </Text>
+      ) : null}
 
       <TextInput
         style={styles.input}
@@ -153,6 +285,13 @@ export default function LoginScreen({ navigation }: any) {
           <Text style={styles.linkText}>Change email / Resend code</Text>
         </TouchableOpacity>
       )}
+
+      {/* Optional debug hint */}
+      {__DEV__ ? (
+        <Text style={[styles.message, { marginTop: 10, opacity: 0.8 }]}>
+          Dev: check console logs for SecureStore token + refresh status
+        </Text>
+      ) : null}
     </View>
   );
 }
