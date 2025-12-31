@@ -8,6 +8,18 @@ import type {
 const BACKEND_BASE_URL = "https://blueangelscareapi.onrender.com";
 
 /**
+ * Mobile Individual (lite) for Clients search
+ */
+export type MobileIndividualLite = {
+  id: string;
+  fullName: string;
+  maNumber?: string | null;
+  address1?: string | null;
+  address2?: string | null;
+  phone?: string | null;
+};
+
+/**
  * ❌ DO NOT USE toISOString()
  * ✅ USE LOCAL TIME STRING (HH:mm)
  */
@@ -24,6 +36,15 @@ async function readBodySafe(res: Response): Promise<string> {
   } catch {
     return "";
   }
+}
+
+async function fetchJsonOrThrow(url: string, init?: RequestInit) {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const body = await readBodySafe(res);
+    throw new Error(`${url} failed (${res.status}): ${body || res.statusText}`);
+  }
+  return res.json();
 }
 
 /**
@@ -74,7 +95,7 @@ export async function verifyLoginOtp(
 }
 
 /**
- * Get today shifts
+ * Get today shifts (by staff)
  */
 export async function getTodayShifts(
   staffId: string,
@@ -93,6 +114,29 @@ export async function getTodayShifts(
   }
 
   const data = await res.json();
+  return data?.shifts ?? [];
+}
+
+/**
+ * ✅ NEW: Get today's shifts (by individual) for Client Detail
+ * GET /mobile/individuals/:id/shifts/today?date=YYYY-MM-DD&staffId=optional
+ */
+export async function getIndividualTodayShifts(params: {
+  individualId: string;
+  date: string;
+  staffId?: string;
+}): Promise<MobileShift[]> {
+  const { individualId, date, staffId } = params;
+
+  const qs = new URLSearchParams();
+  qs.set("date", date);
+  if (staffId) qs.set("staffId", staffId);
+
+  const url = `${BACKEND_BASE_URL}/mobile/individuals/${encodeURIComponent(
+    individualId
+  )}/shifts/today?${qs.toString()}`;
+
+  const data = await fetchJsonOrThrow(url);
   return data?.shifts ?? [];
 }
 
@@ -166,4 +210,67 @@ export async function submitDailyNote(
   }
 
   return res.json();
+}
+
+/**
+ * Clients: Search Individuals
+ */
+export async function searchIndividuals(
+  query: string
+): Promise<MobileIndividualLite[]> {
+  const q = (query || "").trim();
+
+  const candidates: string[] = [
+    `${BACKEND_BASE_URL}/mobile/individuals/search?search=${encodeURIComponent(
+      q
+    )}`,
+    `${BACKEND_BASE_URL}/mobile/individuals?search=${encodeURIComponent(q)}`,
+    `${BACKEND_BASE_URL}/mobile/individuals?query=${encodeURIComponent(q)}`,
+    `${BACKEND_BASE_URL}/individuals?search=${encodeURIComponent(q)}`,
+    `${BACKEND_BASE_URL}/individuals?query=${encodeURIComponent(q)}`,
+  ];
+
+  let lastErr: any = null;
+
+  for (const url of candidates) {
+    try {
+      const data = await fetchJsonOrThrow(url);
+
+      const raw = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.individuals)
+        ? data.individuals
+        : Array.isArray(data?.items)
+        ? data.items
+        : [];
+
+      const normalized: MobileIndividualLite[] = raw
+        .map((x: any) => {
+          const id = String(x?.id ?? x?.individualId ?? "");
+          const fullName =
+            String(
+              x?.fullName ?? x?.name ?? x?.individualName ?? x?.full_name ?? ""
+            ) || "";
+
+          if (!id || !fullName) return null;
+
+          return {
+            id,
+            fullName,
+            maNumber:
+              x?.maNumber ?? x?.ma ?? x?.ma_number ?? x?.medicaidNumber ?? null,
+            address1: x?.address1 ?? x?.addressLine1 ?? null,
+            address2: x?.address2 ?? x?.addressLine2 ?? null,
+            phone: x?.phone ?? x?.phoneNumber ?? null,
+          } as MobileIndividualLite;
+        })
+        .filter(Boolean) as MobileIndividualLite[];
+
+      return normalized;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  throw lastErr || new Error("searchIndividuals failed: no endpoint matched");
 }

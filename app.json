@@ -4,12 +4,15 @@
     "slug": "blue-angels-care-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/splash-icon.png",
+
+    "icon": "./assets/bac-logo.png", // ✅ SỬA Ở ĐÂY
+
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+
     "ios": {
       "bundleIdentifier": "org.blueangelscare.mobile",
       "supportsTablet": false,
@@ -17,9 +20,11 @@
         "ITSAppUsesNonExemptEncryption": false
       }
     },
+
     "android": {
       "package": "org.blueangelscare.mobile"
     },
+
     "extra": {
       "eas": {
         "projectId": "daffae30-51d9-482b-bde2-e91a65d7c160"
