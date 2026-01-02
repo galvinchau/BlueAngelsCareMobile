@@ -19,8 +19,19 @@ const WEBSITE_URL = "https://blueangelscare.org";
 const PRIVACY_URL = "https://blueangelscare.org/privacy";
 const TERMS_URL = "https://blueangelscare.org/terms";
 
+// Office info
+const OFFICE_ADDRESS_LINE1 = "202 Campbell Ave";
+const OFFICE_ADDRESS_LINE2 = "Altoona, PA 16602";
+const OFFICE_ADDRESS_FULL = `${OFFICE_ADDRESS_LINE1}, ${OFFICE_ADDRESS_LINE2}`;
+
+// You can adjust later if needed
+const OFFICE_HOURS = [
+  { label: "Mon - Fri", value: "7:00 AM - 5:00 PM" },
+  { label: "Saturday", value: "Closed" },
+  { label: "Sunday", value: "Closed" },
+];
+
 function getAppVersion() {
-  // Expo managed: Constants.expoConfig.version
   const v =
     (Constants as any)?.expoConfig?.version ||
     (Constants as any)?.manifest?.version ||
@@ -29,7 +40,6 @@ function getAppVersion() {
 }
 
 function getBuildNumber() {
-  // iOS buildNumber / Android versionCode (may be undefined on dev)
   const iosBuild =
     (Constants as any)?.expoConfig?.ios?.buildNumber ||
     (Constants as any)?.manifest?.ios?.buildNumber;
@@ -50,6 +60,27 @@ async function openUrl(url: string, failMessage: string) {
     await Linking.openURL(url);
   } catch {
     Alert.alert("Error", failMessage);
+  }
+}
+
+async function openMapsAddress(address: string) {
+  const query = encodeURIComponent(address);
+
+  // Prefer Apple Maps on iOS, Google Maps web fallback everywhere
+  const appleMaps = `maps://?q=${query}`;
+  const googleMaps = `https://www.google.com/maps/search/?api=1&query=${query}`;
+
+  try {
+    if (Platform.OS === "ios") {
+      const canApple = await Linking.canOpenURL(appleMaps);
+      if (canApple) {
+        await Linking.openURL(appleMaps);
+        return;
+      }
+    }
+    await Linking.openURL(googleMaps);
+  } catch {
+    Alert.alert("Error", "Unable to open Maps.");
   }
 }
 
@@ -104,10 +135,8 @@ export default function HelpScreen() {
 
   const openPrivacy = () =>
     openUrl(PRIVACY_URL, "Unable to open Privacy Policy.");
-
   const openTerms = () =>
     openUrl(TERMS_URL, "Unable to open Terms of Service.");
-
   const openWebsite = () => openUrl(WEBSITE_URL, "Unable to open website.");
 
   const comingSoon = (label: string) =>
@@ -125,7 +154,6 @@ export default function HelpScreen() {
             subtitle={OFFICE_PHONE}
             onPress={handleCall}
           />
-
           <Item
             title="Email Office"
             subtitle={OFFICE_EMAIL}
@@ -143,6 +171,27 @@ export default function HelpScreen() {
             subtitle="Common questions (coming soon)"
             onPress={() => comingSoon("FAQ")}
           />
+        </View>
+
+        {/* Office */}
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Office</Text>
+
+          <Item
+            title="Office Address"
+            subtitle={`${OFFICE_ADDRESS_LINE1}\n${OFFICE_ADDRESS_LINE2}`}
+            onPress={() => openMapsAddress(OFFICE_ADDRESS_FULL)}
+          />
+
+          <View style={styles.hoursBox}>
+            <Text style={styles.hoursTitle}>Office Hours</Text>
+            {OFFICE_HOURS.map((h) => (
+              <View key={h.label} style={styles.hoursRow}>
+                <Text style={styles.hoursLabel}>{h.label}</Text>
+                <Text style={styles.hoursValue}>{h.value}</Text>
+              </View>
+            ))}
+          </View>
         </View>
 
         {/* Links */}
@@ -209,7 +258,7 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 // =======================
-// Theme (BAC) - match Settings
+// Theme (BAC)
 // =======================
 
 const BAC = {
@@ -265,6 +314,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 13,
     color: BAC.muted,
+    lineHeight: 18,
   },
 
   chevron: {
@@ -281,4 +331,33 @@ const styles = StyleSheet.create({
   },
   k: { fontSize: 12, color: BAC.muted, fontWeight: "800" },
   v: { marginTop: 2, fontSize: 15, color: BAC.text, fontWeight: "700" },
+
+  hoursBox: {
+    borderTopWidth: 1,
+    borderColor: BAC.border,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
+  hoursTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: BAC.text,
+    marginBottom: 10,
+  },
+  hoursRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+  },
+  hoursLabel: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: BAC.muted,
+  },
+  hoursValue: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: BAC.text,
+  },
 });
