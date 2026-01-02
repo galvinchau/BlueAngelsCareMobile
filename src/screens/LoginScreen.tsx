@@ -1,5 +1,5 @@
 // src/screens/LoginScreen.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   TouchableOpacity,
   ActivityIndicator,
 } from "react-native";
+
+import * as LocalAuthentication from "expo-local-authentication";
 
 import { requestOtp, verifyOtp, refreshLogin } from "../api/mobileAuthApi";
 import {
@@ -20,10 +22,35 @@ type LoginStep = "ENTER_EMAIL" | "ENTER_OTP";
 
 function isHttpError401_403_400(msg: string) {
   return (
-    msg.includes("HTTP 401") ||
-    msg.includes("HTTP 403") ||
-    msg.includes("HTTP 400")
+    msg.includes("401") ||
+    msg.includes("403") ||
+    msg.includes("400") ||
+    msg.toLowerCase().includes("unauthorized") ||
+    msg.toLowerCase().includes("forbidden")
   );
+}
+
+async function biometricAvailable(): Promise<boolean> {
+  try {
+    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    if (!hasHardware) return false;
+    const enrolled = await LocalAuthentication.isEnrolledAsync();
+    if (!enrolled) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function biometricAuth(): Promise<boolean> {
+  const ok = await biometricAvailable();
+  if (!ok) return true; // no biometric -> allow flow (or skip)
+  const res = await LocalAuthentication.authenticateAsync({
+    promptMessage: "Sign in with Face ID / Touch ID",
+    cancelLabel: "Cancel",
+    disableDeviceFallback: false,
+  });
+  return !!res.success;
 }
 
 export default function LoginScreen({ navigation }: any) {
@@ -32,30 +59,58 @@ export default function LoginScreen({ navigation }: any) {
   const [step, setStep] = useState<LoginStep>("ENTER_EMAIL");
   const [loading, setLoading] = useState(false);
 
-  // Auto-login boot
-  const [booting, setBooting] = useState(true);
-  const [autoLoginError, setAutoLoginError] = useState<string | null>(null);
-
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function tryAutoLogin() {
-    setAutoLoginError(null);
+  const [hasStoredToken, setHasStoredToken] = useState(false);
+  const [bioReady, setBioReady] = useState(false);
 
-    const token = await getRefreshToken();
-    const staff = await getStaffInfo();
+  useEffect(() => {
+    let alive = true;
 
-    console.log("[LoginScreen] SecureStore token exists?", !!token);
-    console.log("[LoginScreen] SecureStore staff:", staff);
+    (async () => {
+      try {
+        const staff = await getStaffInfo();
+        const token = await getRefreshToken();
 
-    // Prefill email (nice UX)
-    if (staff?.email) setEmail(staff.email);
+        if (!alive) return;
 
-    if (!token) return false;
+        if (staff?.email) setEmail(staff.email);
+        setHasStoredToken(!!token);
+
+        const canBio = await biometricAvailable();
+        if (!alive) return;
+        setBioReady(canBio);
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function handleFaceIdSignIn() {
+    setLoading(true);
+    setError(null);
+    setMessage(null);
 
     try {
+      const token = await getRefreshToken();
+      if (!token) {
+        setHasStoredToken(false);
+        setError("No saved login found. Please sign in with OTP.");
+        return;
+      }
+
+      const ok = await biometricAuth();
+      if (!ok) {
+        setMessage("Face ID was canceled. You can sign in with OTP.");
+        return;
+      }
+
       const data = await refreshLogin(token);
-      console.log("[LoginScreen] refreshLogin OK:", data);
 
       navigation.reset({
         index: 0,
@@ -70,42 +125,26 @@ export default function LoginScreen({ navigation }: any) {
           },
         ],
       });
-
-      return true;
     } catch (e: any) {
       const msg = String(e?.message || e);
-      console.error("[LoginScreen] refreshLogin FAILED:", msg);
 
-      // ✅ Only clear token when server says invalid/expired
-      // ❌ If network error, DO NOT clear token
+      // only clear token when server says invalid/expired
       if (isHttpError401_403_400(msg)) {
-        console.log("[LoginScreen] token invalid -> clearing storage");
         await clearAuthStorage();
-      } else {
-        console.log("[LoginScreen] network/unknown -> keep token, allow retry");
+        setHasStoredToken(false);
       }
 
-      setAutoLoginError(msg);
-      return false;
+      setError(
+        isHttpError401_403_400(msg)
+          ? "Saved login expired. Please sign in again with OTP."
+          : "Network issue. Please try again or sign in with OTP."
+      );
+
+      if (__DEV__) console.log("[LoginScreen] FaceID sign-in failed:", msg);
+    } finally {
+      setLoading(false);
     }
   }
-
-  useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      try {
-        await tryAutoLogin();
-      } finally {
-        if (alive) setBooting(false);
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   async function handleSendOtp() {
     const trimmed = email.trim().toLowerCase();
@@ -126,9 +165,8 @@ export default function LoginScreen({ navigation }: any) {
         "We sent a 4-digit code to your email. Please check your inbox (and spam folder)."
       );
     } catch (e: any) {
-      console.error("[LoginScreen] handleSendOtp error:", e?.message || e);
       setError(
-        e?.message ||
+        String(e?.message || "") ||
           "Failed to send code. Please check your email or contact the office."
       );
     } finally {
@@ -171,9 +209,8 @@ export default function LoginScreen({ navigation }: any) {
         ],
       });
     } catch (e: any) {
-      console.error("[LoginScreen] handleVerifyOtp error:", e?.message || e);
       setError(
-        e?.message ||
+        String(e?.message || "") ||
           "Invalid or expired code. Please try again or request a new code."
       );
     } finally {
@@ -183,54 +220,29 @@ export default function LoginScreen({ navigation }: any) {
 
   const isEmailStep = step === "ENTER_EMAIL";
 
-  // Boot screen
-  if (booting) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.title}>Blue Angels Care Mobile</Text>
-        <Text style={styles.subtitle}>Signing you in...</Text>
-        <ActivityIndicator color="#fff" />
-
-        {autoLoginError ? (
-          <>
-            <Text style={[styles.error, { marginTop: 12 }]}>
-              Auto login failed: {autoLoginError}
-            </Text>
-
-            <TouchableOpacity
-              style={[styles.button, { marginTop: 14 }]}
-              onPress={async () => {
-                setBooting(true);
-                try {
-                  await tryAutoLogin();
-                } finally {
-                  setBooting(false);
-                }
-              }}
-            >
-              <Text style={styles.buttonText}>Retry Auto Login</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.linkButton}
-              onPress={() => setBooting(false)}
-            >
-              <Text style={styles.linkText}>Continue to Login</Text>
-            </TouchableOpacity>
-          </>
-        ) : null}
-      </View>
-    );
-  }
-
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Blue Angels Care Mobile</Text>
       <Text style={styles.subtitle}>Sign in with a 4-digit code</Text>
 
-      {autoLoginError ? (
+      {/* FaceID quick sign-in */}
+      {hasStoredToken && bioReady && isEmailStep ? (
+        <TouchableOpacity
+          style={[styles.button, styles.faceIdBtn]}
+          onPress={handleFaceIdSignIn}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Sign in with Face ID</Text>
+          )}
+        </TouchableOpacity>
+      ) : null}
+
+      {hasStoredToken && !bioReady && isEmailStep ? (
         <Text style={styles.message}>
-          Auto login failed earlier. You can login again with OTP.
+          Saved login found. Your device has no Face ID / Touch ID set up.
         </Text>
       ) : null}
 
@@ -285,13 +297,6 @@ export default function LoginScreen({ navigation }: any) {
           <Text style={styles.linkText}>Change email / Resend code</Text>
         </TouchableOpacity>
       )}
-
-      {/* Optional debug hint */}
-      {__DEV__ ? (
-        <Text style={[styles.message, { marginTop: 10, opacity: 0.8 }]}>
-          Dev: check console logs for SecureStore token + refresh status
-        </Text>
-      ) : null}
     </View>
   );
 }
@@ -346,6 +351,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     width: "90%",
     alignItems: "center",
+  },
+  faceIdBtn: {
+    backgroundColor: "#3b82f6",
+    marginTop: 0,
+    marginBottom: 12,
   },
   buttonText: {
     color: "#0f172a",

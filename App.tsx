@@ -6,6 +6,7 @@ import {
   Pressable,
   Text,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import {
@@ -17,6 +18,9 @@ import {
   DrawerNavigationProp,
 } from "@react-navigation/drawer";
 
+import * as SecureStore from "expo-secure-store";
+import * as LocalAuthentication from "expo-local-authentication";
+
 import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
 import DailyNoteScreen from "./src/screens/DailyNoteScreen";
@@ -25,7 +29,7 @@ import ClientDetailScreen from "./src/screens/ClientDetailScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import HelpScreen from "./src/screens/HelpScreen";
 
-// NEW: auto-login helpers
+// auto-login helpers
 import { getRefreshToken } from "./src/auth/authStorage";
 import { refreshLogin } from "./src/api/mobileAuthApi";
 
@@ -90,6 +94,11 @@ const ClientsStack = createNativeStackNavigator<ClientsStackParamList>();
 
 type MainDrawerNavProps = NativeStackScreenProps<RootStackParamList, "Main">;
 
+// =======================
+// Biometric setting key (must match SettingsScreen.tsx)
+// =======================
+const BIOMETRIC_ENABLED_KEY = "BAC_BIOMETRIC_LOGIN_ENABLED";
+
 // Hamburger button
 function DrawerHamburger({ onPress }: { onPress: () => void }) {
   return (
@@ -122,7 +131,7 @@ function ClientsStackNavigator() {
             <DrawerHamburger
               onPress={() => {
                 const parent = navigation.getParent();
-                // @ts-ignore - toggleDrawer exists on drawer navigation
+                // @ts-ignore
                 parent?.toggleDrawer?.();
               }}
             />
@@ -201,6 +210,57 @@ function MainDrawerNavigator({ route }: MainDrawerNavProps) {
 }
 
 // =======================
+// Biometric helpers
+// =======================
+async function isBiometricEnabledByUser(): Promise<boolean> {
+  try {
+    const raw = await SecureStore.getItemAsync(BIOMETRIC_ENABLED_KEY);
+    return raw === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function canUseBiometric(): Promise<boolean> {
+  try {
+    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    if (!hasHardware) return false;
+
+    const enrolled = await LocalAuthentication.isEnrolledAsync();
+    if (!enrolled) return false;
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function promptBiometricIfEnabled(): Promise<boolean> {
+  // Only require biometric if user enabled it in Settings
+  const enabled = await isBiometricEnabledByUser();
+  if (!enabled) return true;
+
+  const usable = await canUseBiometric();
+  if (!usable) {
+    // User enabled biometric but device cannot do it => allow login, and notify
+    Alert.alert(
+      "Biometric unavailable",
+      "Biometric Login is enabled, but this device does not have Face ID/Touch ID set up. Please configure it in iPhone Settings or disable Biometric Login in the app Settings."
+    );
+    return true;
+  }
+
+  const result = await LocalAuthentication.authenticateAsync({
+    promptMessage: "Sign in with Face ID / Touch ID",
+    cancelLabel: "Cancel",
+    fallbackLabel: "Use Passcode",
+    disableDeviceFallback: false,
+  });
+
+  return !!result.success;
+}
+
+// =======================
 // Root App
 // =======================
 export default function App() {
@@ -224,6 +284,16 @@ export default function App() {
           return;
         }
 
+        // ✅ Gate with FaceID ONLY if user enabled Biometric Login
+        const ok = await promptBiometricIfEnabled();
+        if (!ok) {
+          if (!mounted) return;
+          // user canceled/failed -> go to Login (do not clear token)
+          setInitialRoute("Login");
+          setInitialParams(undefined);
+          return;
+        }
+
         // try refresh
         const data = await refreshLogin(token);
 
@@ -234,11 +304,16 @@ export default function App() {
           staffName: data.staffName,
           staffEmail: data.email,
         });
-      } catch {
+      } catch (e: any) {
         if (!mounted) return;
         // refresh failed -> force login with OTP
         setInitialRoute("Login");
         setInitialParams(undefined);
+
+        if (__DEV__) {
+          const msg = String(e?.message || e);
+          console.log("[App] bootstrap failed:", msg);
+        }
       } finally {
         if (!mounted) return;
         setBooting(false);

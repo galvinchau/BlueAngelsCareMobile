@@ -14,7 +14,8 @@
       "bundleIdentifier": "org.blueangelscare.mobile",
       "supportsTablet": false,
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSFaceIDUsageDescription": "Use Face ID to sign in faster and protect your account."
       }
     },
     "android": {
@@ -25,8 +26,6 @@
         "projectId": "daffae30-51d9-482b-bde2-e91a65d7c160"
       }
     },
-    "plugins": [
-      "expo-secure-store"
-    ]
+    "plugins": ["expo-secure-store", "expo-local-authentication"]
   }
 }
