@@ -14,19 +14,19 @@ import {
 import Constants from "expo-constants";
 
 const OFFICE_PHONE = "+18146002313"; // Blue Angels Care Office
-const OFFICE_EMAIL = "blueangelscarellc@gmail.com";
+const OFFICE_EMAIL = "admin@blueangelscare.org";
 const WEBSITE_URL = "https://blueangelscare.org";
 const PRIVACY_URL = "https://blueangelscare.org/privacy";
 const TERMS_URL = "https://blueangelscare.org/terms";
 
 // Office info
-const OFFICE_ADDRESS_LINE1 = "202 Campbell Ave";
-const OFFICE_ADDRESS_LINE2 = "Altoona, PA 16602";
+const OFFICE_ADDRESS_LINE1 = "3107 Beale Ave";
+const OFFICE_ADDRESS_LINE2 = "Altoona, PA 16601";
 const OFFICE_ADDRESS_FULL = `${OFFICE_ADDRESS_LINE1}, ${OFFICE_ADDRESS_LINE2}`;
 
 // You can adjust later if needed
 const OFFICE_HOURS = [
-  { label: "Mon - Fri", value: "7:00 AM - 5:00 PM" },
+  { label: "Mon - Fri", value: "9:00 AM - 5:00 PM" },
   { label: "Saturday", value: "Closed" },
   { label: "Sunday", value: "Closed" },
 ];

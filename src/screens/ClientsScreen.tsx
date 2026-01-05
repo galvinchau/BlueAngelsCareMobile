@@ -2,6 +2,7 @@
 import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   SafeAreaView,
@@ -14,11 +15,15 @@ import {
   Platform,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import type { ClientsStackParamList } from "../../App";
+import type { ClientsStackParamList, MainDrawerParamList } from "../../App";
 import {
   searchIndividuals,
   type MobileIndividualLite,
 } from "../api/mobileClient";
+
+// NEW: for unknown-visit API
+import { BACKEND_BASE_URL } from "../config";
+import { getStaffInfo } from "../auth/authStorage";
 
 type Props = NativeStackScreenProps<ClientsStackParamList, "ClientsList">;
 
@@ -104,6 +109,38 @@ function clientMatches(item: MobileIndividualLite, query: string): boolean {
   return false;
 }
 
+/**
+ * Extract a human-friendly error message from fetch Response body.
+ * Supports NestJS default error format:
+ * { statusCode, message, error }
+ */
+async function readApiErrorMessage(res: Response): Promise<string> {
+  let raw = "";
+  try {
+    raw = await res.text();
+  } catch {
+    raw = "";
+  }
+
+  // Try parse JSON (NestJS often returns JSON)
+  try {
+    const data = raw ? JSON.parse(raw) : null;
+    const msg = data?.message;
+
+    if (Array.isArray(msg)) return msg.join("\n");
+    if (typeof msg === "string" && msg.trim()) return msg.trim();
+
+    if (typeof data?.error === "string" && data.error.trim())
+      return data.error.trim();
+    if (typeof data?.statusCode === "number") return `HTTP ${data.statusCode}`;
+  } catch {
+    // ignore
+  }
+
+  if (raw && raw.trim()) return raw.trim();
+  return `HTTP ${res.status}`;
+}
+
 export default function ClientsScreen({ navigation }: Props) {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
@@ -148,6 +185,27 @@ export default function ClientsScreen({ navigation }: Props) {
 
   const openDetail = (item: MobileIndividualLite) => {
     navigation.navigate("ClientDetail", { individual: item });
+  };
+
+  /**
+   * After creating unknown visit -> go to Drawer DailyNote with shiftId
+   */
+  const handleUnknownVisitCreated = async (shiftId: string) => {
+    try {
+      const parent = navigation.getParent(); // Drawer
+      const staff = await getStaffInfo();
+
+      // Navigate to Daily Note screen in Drawer
+      // @ts-ignore - Drawer route exists in App.tsx
+      parent?.navigate?.("DailyNote", {
+        shiftId,
+        staffId: staff?.staffId,
+        staffName: staff?.staffName,
+        staffEmail: staff?.email,
+      } as MainDrawerParamList["DailyNote"]);
+    } catch (e) {
+      console.log("[ClientsScreen] handleUnknownVisitCreated nav error:", e);
+    }
   };
 
   return (
@@ -287,6 +345,7 @@ export default function ClientsScreen({ navigation }: Props) {
         <UnknownVisitModal
           visible={unknownOpen}
           onClose={() => setUnknownOpen(false)}
+          onCreated={handleUnknownVisitCreated}
         />
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -299,9 +358,11 @@ export default function ClientsScreen({ navigation }: Props) {
 function UnknownVisitModal({
   visible,
   onClose,
+  onCreated,
 }: {
   visible: boolean;
   onClose: () => void;
+  onCreated: (shiftId: string) => void;
 }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -309,28 +370,75 @@ function UnknownVisitModal({
   const [clientId, setClientId] = useState("");
   const [groupCode, setGroupCode] = useState("");
 
+  const [submitting, setSubmitting] = useState(false);
+
   const canStart = firstName.trim().length > 0 && lastName.trim().length > 0;
 
-  const startVisit = () => {
-    if (!canStart) return;
+  /**
+   * Create AD-HOC shift on backend then navigate to DailyNote
+   * Expected backend response: { shiftId: string }
+   */
+  const startVisit = async () => {
+    if (!canStart || submitting) return;
 
-    Alert.alert(
-      "Unknown Visit",
-      [
-        `Name: ${firstName.trim()} ${lastName.trim()}`,
-        medicaidId.trim() ? `Medicaid ID: ${medicaidId.trim()}` : "",
-        clientId.trim() ? `Client ID: ${clientId.trim()}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
+    const staff = await getStaffInfo();
+    if (!staff?.staffId) {
+      Alert.alert("Login required", "Missing staff info. Please log in again.");
+      return;
+    }
 
-    setFirstName("");
-    setLastName("");
-    setMedicaidId("");
-    setClientId("");
-    setGroupCode("");
-    onClose();
+    setSubmitting(true);
+    try {
+      const payload = {
+        staffId: staff.staffId,
+        staffName: staff.staffName,
+        staffEmail: staff.email,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        medicaidId: medicaidId.trim() || null,
+        clientId: clientId.trim() || null,
+
+        // ✅ add defaults for backend
+        serviceCode: "COMP",
+        clientTime: new Date().toISOString(),
+      };
+
+      const url = `${BACKEND_BASE_URL}/mobile/visits/unknown/start`;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const msg = await readApiErrorMessage(res);
+        throw new Error(msg);
+      }
+
+      const data = await res.json();
+
+      if (!data?.shiftId) {
+        throw new Error("Server response missing shiftId");
+      }
+
+      // reset fields
+      setFirstName("");
+      setLastName("");
+      setMedicaidId("");
+      setClientId("");
+      setGroupCode("");
+
+      onClose();
+
+      // go to DailyNote with shiftId
+      onCreated(String(data.shiftId));
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      Alert.alert("Start Unknown Visit failed", msg);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const startGroupVisit = () =>
@@ -350,7 +458,13 @@ function UnknownVisitModal({
         <View style={styles.modalSheet}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Start Unknown Visit</Text>
-            <Pressable onPress={onClose} style={styles.modalCloseBtn}>
+            <Pressable
+              onPress={() => {
+                if (submitting) return;
+                onClose();
+              }}
+              style={styles.modalCloseBtn}
+            >
               <Text style={styles.modalCloseText}>✕</Text>
             </Pressable>
           </View>
@@ -390,16 +504,27 @@ function UnknownVisitModal({
 
           <Pressable
             onPress={startVisit}
-            disabled={!canStart}
+            disabled={!canStart || submitting}
             style={[
               styles.primaryBtn,
-              !canStart ? styles.primaryBtnDisabled : null,
+              !canStart || submitting ? styles.primaryBtnDisabled : null,
             ]}
           >
-            <Text style={styles.primaryBtnText}>Start Visit</Text>
+            {submitting ? (
+              <View style={styles.btnRow}>
+                <ActivityIndicator color="#fff" />
+                <Text style={styles.primaryBtnText}>Starting...</Text>
+              </View>
+            ) : (
+              <Text style={styles.primaryBtnText}>Start Visit</Text>
+            )}
           </Pressable>
 
-          <Pressable onPress={startGroupVisit} style={[styles.secondaryBtn]}>
+          <Pressable
+            onPress={startGroupVisit}
+            disabled={submitting}
+            style={[styles.secondaryBtn]}
+          >
             <Text style={styles.secondaryBtnText}>Start Group Visit</Text>
           </Pressable>
 
@@ -413,7 +538,11 @@ function UnknownVisitModal({
             style={styles.modalInput}
           />
 
-          <Pressable onPress={joinGroupVisit} style={[styles.secondaryBtn]}>
+          <Pressable
+            onPress={joinGroupVisit}
+            disabled={submitting}
+            style={[styles.secondaryBtn]}
+          >
             <Text style={styles.secondaryBtnText}>Join Group Visit</Text>
           </Pressable>
 
