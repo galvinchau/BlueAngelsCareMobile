@@ -131,6 +131,57 @@ function absDiffMinutesWrap(a: number, b: number): number {
   return Math.min(diff, 24 * 60 - diff);
 }
 
+/**
+ * ✅ Friendly error message (English) for staff
+ * - hides "400", JSON, raw errors
+ * - maps Office Time Keeping conflict to a clear message
+ */
+function extractFriendlyErrorMessage(err: any): string {
+  if (!err) {
+    return "Unable to complete this action. Please try again.";
+  }
+
+  const raw = String(err?.message || err);
+
+  // Try to extract JSON body {"message": "..."}
+  try {
+    const jsonMatch = raw.match(/\{.*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      if (parsed?.message) {
+        const msg = String(parsed.message);
+
+        // Office Time Keeping conflict
+        if (
+          msg.includes("Office Time Keeping") ||
+          msg.toLowerCase().includes("time keeping")
+        ) {
+          return (
+            "You are currently checked in for Office Time Keeping.\n\n" +
+            "Please check out of Office Time Keeping first to avoid overlapping work hours."
+          );
+        }
+
+        // Default backend message (already human readable)
+        return msg;
+      }
+    }
+  } catch {
+    // ignore parse errors
+  }
+
+  // Fallback (no JSON)
+  if (raw.toLowerCase().includes("time keeping")) {
+    return (
+      "You are currently checked in for Office Time Keeping.\n\n" +
+      "Please check out of Office Time Keeping first to avoid overlapping work hours."
+    );
+  }
+
+  return "Unable to check in. Please try again or contact the office.";
+}
+
 const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const params = route?.params ?? {};
 
@@ -343,7 +394,10 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       setStatusMessage("Checked in successfully.");
     } catch (e) {
       console.error("[DailyNoteScreen] handleCheckIn error:", e);
-      setErrorMessage("Failed to check in. Please try again.");
+
+      const friendly = extractFriendlyErrorMessage(e);
+      setErrorMessage(friendly);
+      Alert.alert("Unable to Check In", friendly);
     } finally {
       setCheckinLoading(false);
     }
@@ -371,7 +425,11 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       setStatusMessage("Checked out successfully.");
     } catch (e) {
       console.error("[DailyNoteScreen] handleCheckOut error:", e);
-      setErrorMessage("Failed to check out. Please try again.");
+
+      // keep it consistent (hide raw codes)
+      const friendly = extractFriendlyErrorMessage(e);
+      setErrorMessage(friendly);
+      Alert.alert("Unable to Check Out", friendly);
     } finally {
       setCheckoutLoading(false);
     }
