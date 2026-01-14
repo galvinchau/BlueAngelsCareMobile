@@ -12,6 +12,7 @@
     },
     "ios": {
       "bundleIdentifier": "org.blueangelscare.mobile",
+      "buildNumber": "9",
       "supportsTablet": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
