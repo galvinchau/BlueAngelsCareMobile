@@ -18,6 +18,10 @@ import type { ClientsStackParamList } from "../../App";
 import type { MobileShift } from "../types/mobileApi";
 import { getIndividualTodayShifts } from "../api/mobileClient";
 
+// ✅ Add: Unknown-visit API deps (same as ClientsScreen)
+import { BACKEND_BASE_URL } from "../config";
+import { getStaffInfo } from "../auth/authStorage";
+
 type Props = NativeStackScreenProps<ClientsStackParamList, "ClientDetail">;
 
 function getLocalDateYYYYMMDD(): string {
@@ -38,6 +42,37 @@ function statusPillStyle(s: MobileShift["status"]) {
   if (s === "IN_PROGRESS") return styles.pillIn;
   if (s === "COMPLETED") return styles.pillDone;
   return styles.pillNot;
+}
+
+/**
+ * Extract a human-friendly error message from fetch Response body.
+ * Supports NestJS default error format:
+ * { statusCode, message, error }
+ */
+async function readApiErrorMessage(res: Response): Promise<string> {
+  let raw = "";
+  try {
+    raw = await res.text();
+  } catch {
+    raw = "";
+  }
+
+  try {
+    const data = raw ? JSON.parse(raw) : null;
+    const msg = data?.message;
+
+    if (Array.isArray(msg)) return msg.join("\n");
+    if (typeof msg === "string" && msg.trim()) return msg.trim();
+
+    if (typeof data?.error === "string" && data.error.trim())
+      return data.error.trim();
+    if (typeof data?.statusCode === "number") return `HTTP ${data.statusCode}`;
+  } catch {
+    // ignore
+  }
+
+  if (raw && raw.trim()) return raw.trim();
+  return `HTTP ${res.status}`;
 }
 
 export default function ClientDetailScreen({ route, navigation }: Props) {
@@ -139,6 +174,14 @@ export default function ClientDetailScreen({ route, navigation }: Props) {
         "Unable to open Daily Note screen from here. Please open Daily Note from the menu."
       );
     }
+  };
+
+  /**
+   * ✅ After created Unknown Visit shift -> open DailyNote
+   */
+  const handleUnknownVisitCreated = (shiftId: string) => {
+    setUnknownOpen(false);
+    goToDailyNote(shiftId);
   };
 
   return (
@@ -279,6 +322,7 @@ export default function ClientDetailScreen({ route, navigation }: Props) {
         onClose={() => setUnknownOpen(false)}
         presetFullName={individual.fullName}
         presetMedicaidId={individual.maNumber || ""}
+        onCreated={handleUnknownVisitCreated}
       />
     </SafeAreaView>
   );
@@ -294,18 +338,20 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 // =======================
-// Unknown Visit Modal (reused)
+// Unknown Visit Modal (REAL backend call)
 // =======================
 function UnknownVisitModal({
   visible,
   onClose,
   presetFullName,
   presetMedicaidId,
+  onCreated,
 }: {
   visible: boolean;
   onClose: () => void;
   presetFullName?: string;
   presetMedicaidId?: string;
+  onCreated: (shiftId: string) => void;
 }) {
   const initial = useMemo(() => {
     const full = (presetFullName || "").trim();
@@ -320,23 +366,68 @@ function UnknownVisitModal({
   const [clientId, setClientId] = useState("");
   const [groupCode, setGroupCode] = useState("");
 
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    // When modal opens for a different individual, refresh defaults
+    setFirstName(initial.first);
+    setLastName(initial.last);
+    setMedicaidId(presetMedicaidId || "");
+    // keep clientId/groupCode empty
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initial.first, initial.last, presetMedicaidId, visible]);
+
   const canStart = firstName.trim().length > 0 && lastName.trim().length > 0;
 
-  const startVisit = () => {
-    if (!canStart) return;
+  const startVisit = async () => {
+    if (!canStart || submitting) return;
 
-    Alert.alert(
-      "Unknown Visit",
-      [
-        `Name: ${firstName.trim()} ${lastName.trim()}`,
-        medicaidId.trim() ? `Medicaid ID: ${medicaidId.trim()}` : "",
-        clientId.trim() ? `Client ID: ${clientId.trim()}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
+    const staff = await getStaffInfo();
+    if (!staff?.staffId) {
+      Alert.alert("Login required", "Missing staff info. Please log in again.");
+      return;
+    }
 
-    onClose();
+    setSubmitting(true);
+    try {
+      const payload = {
+        staffId: staff.staffId,
+        staffName: staff.staffName,
+        staffEmail: staff.email,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        medicaidId: medicaidId.trim() || null,
+        clientId: clientId.trim() || null,
+
+        // defaults
+        serviceCode: "COMP",
+        clientTime: new Date().toISOString(),
+      };
+
+      const url = `${BACKEND_BASE_URL}/mobile/visits/unknown/start`;
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const msg = await readApiErrorMessage(res);
+        throw new Error(msg);
+      }
+
+      const data = await res.json();
+      if (!data?.shiftId) throw new Error("Server response missing shiftId");
+
+      onClose();
+      onCreated(String(data.shiftId));
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      Alert.alert("Start Unknown Visit failed", msg);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const startGroupVisit = () =>
@@ -356,7 +447,13 @@ function UnknownVisitModal({
         <View style={styles.modalSheet}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Start Unknown Visit</Text>
-            <Pressable onPress={onClose} style={styles.modalCloseBtn}>
+            <Pressable
+              onPress={() => {
+                if (submitting) return;
+                onClose();
+              }}
+              style={styles.modalCloseBtn}
+            >
               <Text style={styles.modalCloseText}>✕</Text>
             </Pressable>
           </View>
@@ -396,13 +493,27 @@ function UnknownVisitModal({
 
           <Pressable
             onPress={startVisit}
-            disabled={!canStart}
-            style={[styles.btn, !canStart ? styles.btnDisabled : null]}
+            disabled={!canStart || submitting}
+            style={[
+              styles.btn,
+              !canStart || submitting ? styles.btnDisabled : null,
+            ]}
           >
-            <Text style={styles.btnText}>Start Visit</Text>
+            {submitting ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator color="#fff" />
+                <Text style={styles.btnText}>Starting...</Text>
+              </View>
+            ) : (
+              <Text style={styles.btnText}>Start Visit</Text>
+            )}
           </Pressable>
 
-          <Pressable onPress={startGroupVisit} style={[styles.btnSecondary]}>
+          <Pressable
+            onPress={startGroupVisit}
+            disabled={submitting}
+            style={[styles.btnSecondary]}
+          >
             <Text style={styles.btnSecondaryText}>Start Group Visit</Text>
           </Pressable>
 
@@ -416,7 +527,11 @@ function UnknownVisitModal({
             style={styles.modalInput}
           />
 
-          <Pressable onPress={joinGroupVisit} style={[styles.btnSecondary]}>
+          <Pressable
+            onPress={joinGroupVisit}
+            disabled={submitting}
+            style={[styles.btnSecondary]}
+          >
             <Text style={styles.btnSecondaryText}>Join Group Visit</Text>
           </Pressable>
 

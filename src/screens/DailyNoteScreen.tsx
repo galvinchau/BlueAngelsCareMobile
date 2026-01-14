@@ -485,17 +485,15 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       }
     }
 
+    // ✅ DSP signature is REQUIRED
     if (!dspSignature) {
       setDspSignatureError("DSP signature is required.");
       Alert.alert("Daily Note", "Please capture the DSP signature.");
       return;
     }
 
-    if (!individualSignature) {
-      setIndividualSignatureError("Individual signature is required.");
-      Alert.alert("Daily Note", "Please capture the Individual signature.");
-      return;
-    }
+    // ✅ Individual signature is OPTIONAL (no blocking)
+    // If missing, we still allow submit.
 
     setSubmitLoading(true);
     setDspSignatureError(null);
@@ -555,7 +553,9 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
         : undefined,
 
       dspSignature: dspSignature,
-      individualSignature: individualSignature,
+
+      // ✅ OPTIONAL: only send if present
+      individualSignature: individualSignature || undefined,
     };
 
     console.log("[DailyNoteScreen] submit payload:", payload);
@@ -935,7 +935,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           ) : null}
 
           {/* Individual signature */}
-          <Text style={styles.fieldLabel}>Individual Signature</Text>
+          <Text style={styles.fieldLabel}>Individual Signature (optional)</Text>
           <View style={styles.signatureBox}>
             <SignatureCanvas
               ref={individualSignatureRef}

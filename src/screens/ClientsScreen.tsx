@@ -13,6 +13,7 @@ import {
   View,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { ClientsStackParamList, MainDrawerParamList } from "../../App";
@@ -122,7 +123,6 @@ async function readApiErrorMessage(res: Response): Promise<string> {
     raw = "";
   }
 
-  // Try parse JSON (NestJS often returns JSON)
   try {
     const data = raw ? JSON.parse(raw) : null;
     const msg = data?.message;
@@ -139,6 +139,40 @@ async function readApiErrorMessage(res: Response): Promise<string> {
 
   if (raw && raw.trim()) return raw.trim();
   return `HTTP ${res.status}`;
+}
+
+function buildAddressLine(ind?: MobileIndividualLite | null): string {
+  if (!ind) return "";
+  const parts = [ind.address1, ind.address2].filter(Boolean);
+  return parts.join(", ");
+}
+
+async function openMapsForAddress(addressText: string) {
+  const addr = (addressText || "").trim();
+  if (!addr) {
+    Alert.alert("Directions", "Address is not available.");
+    return;
+  }
+
+  const encoded = encodeURIComponent(addr);
+  const appleMapsUrl = `http://maps.apple.com/?q=${encoded}`;
+  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encoded}`;
+
+  try {
+    const canApple = await Linking.canOpenURL(appleMapsUrl);
+    if (canApple) {
+      await Linking.openURL(appleMapsUrl);
+      return;
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    await Linking.openURL(googleMapsUrl);
+  } catch {
+    Alert.alert("Directions", "Unable to open Maps on this device.");
+  }
 }
 
 export default function ClientsScreen({ navigation }: Props) {
@@ -195,7 +229,6 @@ export default function ClientsScreen({ navigation }: Props) {
       const parent = navigation.getParent(); // Drawer
       const staff = await getStaffInfo();
 
-      // Navigate to Daily Note screen in Drawer
       // @ts-ignore - Drawer route exists in App.tsx
       parent?.navigate?.("DailyNote", {
         shiftId,
@@ -354,6 +387,7 @@ export default function ClientsScreen({ navigation }: Props) {
 
 // =======================
 // Unknown Visit Modal
+// (New flow: input loose -> Search -> pick individual -> auto location -> tap address -> maps)
 // =======================
 function UnknownVisitModal({
   visible,
@@ -367,19 +401,99 @@ function UnknownVisitModal({
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [medicaidId, setMedicaidId] = useState("");
-  const [clientId, setClientId] = useState("");
-  const [groupCode, setGroupCode] = useState("");
 
+  const [serviceCode, setServiceCode] = useState<"COMP" | "HCSS" | "PCA">(
+    "COMP"
+  );
+
+  const [picked, setPicked] = useState<MobileIndividualLite | null>(null);
+  const [location, setLocation] = useState("");
+
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestErr, setSuggestErr] = useState<string | null>(null);
+  const [suggestItems, setSuggestItems] = useState<MobileIndividualLite[]>([]);
+
+  const [groupCode, setGroupCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const canStart = firstName.trim().length > 0 && lastName.trim().length > 0;
+  const SERVICE_OPTIONS: Array<"COMP" | "HCSS" | "PCA"> = [
+    "COMP",
+    "HCSS",
+    "PCA",
+  ];
+
+  const canSearch =
+    firstName.trim().length > 0 ||
+    lastName.trim().length > 0 ||
+    medicaidId.trim().length > 0;
+
+  const canStart = !!picked && !submitting;
+
+  const resetAll = () => {
+    setFirstName("");
+    setLastName("");
+    setMedicaidId("");
+    setServiceCode("COMP");
+    setPicked(null);
+    setLocation("");
+    setSuggestErr(null);
+    setSuggestItems([]);
+    setGroupCode("");
+  };
+
+  const runSuggestSearch = async () => {
+    if (!canSearch || suggestLoading) return;
+
+    setSuggestLoading(true);
+    setSuggestErr(null);
+    setSuggestItems([]);
+    setPicked(null);
+    setLocation("");
+
+    try {
+      // Loose query: combine what user typed
+      const q = [firstName.trim(), lastName.trim(), medicaidId.trim()]
+        .filter(Boolean)
+        .join(" ");
+
+      const res = await searchIndividuals(q);
+      const list = (res || []).slice(0, 8); // limit
+      setSuggestItems(list);
+
+      if (list.length === 0) {
+        setSuggestErr("No matching clients found. Try a different keyword.");
+      }
+    } catch (e: any) {
+      setSuggestErr(
+        "Server search is not available right now. Please try again."
+      );
+      setSuggestItems([]);
+    } finally {
+      setSuggestLoading(false);
+    }
+  };
+
+  const chooseIndividual = (ind: MobileIndividualLite) => {
+    setPicked(ind);
+
+    // auto-fill medicaid and location
+    if (ind.maNumber) setMedicaidId(ind.maNumber);
+    const addr = buildAddressLine(ind);
+    setLocation(addr);
+  };
 
   /**
    * Create AD-HOC shift on backend then navigate to DailyNote
    * Expected backend response: { shiftId: string }
    */
   const startVisit = async () => {
-    if (!canStart || submitting) return;
+    if (!canStart) {
+      Alert.alert(
+        "Select a client",
+        "Please search and select the correct client first."
+      );
+      return;
+    }
 
     const staff = await getStaffInfo();
     if (!staff?.staffId) {
@@ -393,13 +507,23 @@ function UnknownVisitModal({
         staffId: staff.staffId,
         staffName: staff.staffName,
         staffEmail: staff.email,
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        medicaidId: medicaidId.trim() || null,
-        clientId: clientId.trim() || null,
 
-        // ✅ add defaults for backend
-        serviceCode: "COMP",
+        // from picked individual
+        firstName: (picked?.fullName || "").split(" ").filter(Boolean)[0] || "",
+        lastName:
+          (picked?.fullName || "")
+            .split(" ")
+            .filter(Boolean)
+            .slice(1)
+            .join(" ") || "",
+
+        // keep medicaid (optional)
+        medicaidId: medicaidId.trim() || null,
+
+        // NEW
+        serviceCode,
+        location: location.trim() || null,
+
         clientTime: new Date().toISOString(),
       };
 
@@ -417,21 +541,12 @@ function UnknownVisitModal({
       }
 
       const data = await res.json();
+      if (!data?.shiftId) throw new Error("Server response missing shiftId");
 
-      if (!data?.shiftId) {
-        throw new Error("Server response missing shiftId");
-      }
-
-      // reset fields
-      setFirstName("");
-      setLastName("");
-      setMedicaidId("");
-      setClientId("");
-      setGroupCode("");
-
+      // close & reset
       onClose();
+      resetAll();
 
-      // go to DailyNote with shiftId
       onCreated(String(data.shiftId));
     } catch (e: any) {
       const msg = String(e?.message || e);
@@ -462,6 +577,7 @@ function UnknownVisitModal({
               onPress={() => {
                 if (submitting) return;
                 onClose();
+                resetAll();
               }}
               style={styles.modalCloseBtn}
             >
@@ -470,20 +586,20 @@ function UnknownVisitModal({
           </View>
 
           <Text style={styles.modalHint}>
-            Please enter the client's name to continue.
+            Enter any of the fields below, then tap Search to find the client.
           </Text>
 
           <TextInput
             value={firstName}
             onChangeText={setFirstName}
-            placeholder="First Name"
+            placeholder="First Name (optional)"
             placeholderTextColor={BAC.muted}
             style={styles.modalInput}
           />
           <TextInput
             value={lastName}
             onChangeText={setLastName}
-            placeholder="Last Name"
+            placeholder="Last Name (optional)"
             placeholderTextColor={BAC.muted}
             style={styles.modalInput}
           />
@@ -494,20 +610,138 @@ function UnknownVisitModal({
             placeholderTextColor={BAC.muted}
             style={styles.modalInput}
           />
-          <TextInput
-            value={clientId}
-            onChangeText={setClientId}
-            placeholder="Client ID (optional)"
-            placeholderTextColor={BAC.muted}
-            style={styles.modalInput}
-          />
 
+          {/* Search button */}
+          <Pressable
+            onPress={runSuggestSearch}
+            disabled={!canSearch || suggestLoading || submitting}
+            style={[
+              styles.secondaryBtn,
+              (!canSearch || suggestLoading || submitting) &&
+                styles.secondaryBtnDisabled,
+            ]}
+          >
+            {suggestLoading ? (
+              <View style={styles.btnRow}>
+                <ActivityIndicator />
+                <Text style={styles.secondaryBtnText}>Searching...</Text>
+              </View>
+            ) : (
+              <Text style={styles.secondaryBtnText}>Search</Text>
+            )}
+          </Pressable>
+
+          {suggestErr ? (
+            <Text style={styles.suggestErr}>{suggestErr}</Text>
+          ) : null}
+
+          {/* Suggest list */}
+          {suggestItems.length > 0 ? (
+            <View style={styles.suggestWrap}>
+              <Text style={styles.modalLabel}>Select the correct client</Text>
+
+              <View style={{ marginTop: 8, gap: 8 }}>
+                {suggestItems.map((x) => {
+                  const active = picked?.id === x.id;
+                  const addr = buildAddressLine(x);
+                  return (
+                    <Pressable
+                      key={x.id}
+                      onPress={() => chooseIndividual(x)}
+                      style={({ pressed }) => [
+                        styles.suggestItem,
+                        active ? styles.suggestItemActive : null,
+                        pressed ? { opacity: 0.92 } : null,
+                      ]}
+                    >
+                      <View style={{ flexDirection: "row", gap: 10 }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.suggestName} numberOfLines={1}>
+                            {x.fullName}
+                          </Text>
+                          {!!x.maNumber && (
+                            <Text style={styles.suggestMeta}>{x.maNumber}</Text>
+                          )}
+                          {!!addr && (
+                            <Text style={styles.suggestAddr} numberOfLines={2}>
+                              {addr}
+                            </Text>
+                          )}
+                        </View>
+
+                        {active ? (
+                          <View style={styles.checkPill}>
+                            <Text style={styles.checkPillText}>Selected</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Type Service */}
+          <View style={{ marginTop: 12 }}>
+            <Text style={styles.modalLabel}>Type Service</Text>
+            <View style={styles.chipsRow}>
+              {SERVICE_OPTIONS.map((code) => {
+                const active = serviceCode === code;
+                return (
+                  <Pressable
+                    key={code}
+                    onPress={() => setServiceCode(code)}
+                    disabled={submitting}
+                    style={({ pressed }) => [
+                      styles.chip,
+                      active ? styles.chipActive : null,
+                      pressed && !submitting ? { opacity: 0.9 } : null,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        active ? styles.chipTextActive : null,
+                      ]}
+                    >
+                      {code}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Location (auto from picked) */}
+          <View style={{ marginTop: 12 }}>
+            <Text style={styles.modalLabel}>Location</Text>
+
+            {location ? (
+              <Pressable
+                onPress={() => openMapsForAddress(location)}
+                style={({ pressed }) => [
+                  styles.locationCard,
+                  pressed ? { opacity: 0.9 } : null,
+                ]}
+              >
+                <Text style={styles.locationText}>{location}</Text>
+                <Text style={styles.locationHint}>Tap to open Maps</Text>
+              </Pressable>
+            ) : (
+              <Text style={styles.mutedSmall}>
+                Select a client to auto-fill address.
+              </Text>
+            )}
+          </View>
+
+          {/* Start visit */}
           <Pressable
             onPress={startVisit}
-            disabled={!canStart || submitting}
+            disabled={!canStart}
             style={[
               styles.primaryBtn,
-              !canStart || submitting ? styles.primaryBtnDisabled : null,
+              !canStart ? styles.primaryBtnDisabled : null,
             ]}
           >
             {submitting ? (
@@ -621,6 +855,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BAC.border,
   },
+  secondaryBtnDisabled: { opacity: 0.5 },
   secondaryBtnText: { color: BAC.primary, fontWeight: "900", fontSize: 15 },
 
   notice: { marginTop: 10, fontSize: 12, color: BAC.text },
@@ -725,6 +960,9 @@ const styles = StyleSheet.create({
   },
   modalCloseText: { fontSize: 16, fontWeight: "900", color: BAC.text },
   modalHint: { marginBottom: 10, fontSize: 12, color: BAC.muted },
+
+  modalLabel: { fontSize: 12, fontWeight: "900", color: BAC.text },
+
   modalInput: {
     marginTop: 10,
     backgroundColor: BAC.soft,
@@ -736,6 +974,83 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: BAC.text,
   },
+
+  suggestErr: {
+    marginTop: 10,
+    fontSize: 12,
+    color: BAC.warn,
+    fontWeight: "800",
+  },
+
+  suggestWrap: { marginTop: 12 },
+  suggestItem: {
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: BAC.border,
+    borderRadius: 12,
+    padding: 12,
+  },
+  suggestItemActive: { borderColor: BAC.primary },
+  suggestName: { fontSize: 14, fontWeight: "900", color: BAC.text },
+  suggestMeta: {
+    marginTop: 4,
+    fontSize: 12,
+    color: BAC.muted,
+    fontWeight: "800",
+  },
+  suggestAddr: { marginTop: 4, fontSize: 12, color: BAC.text },
+
+  checkPill: {
+    alignSelf: "flex-start",
+    backgroundColor: BAC.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  checkPillText: { color: "#fff", fontWeight: "900", fontSize: 11 },
+
+  chipsRow: {
+    marginTop: 8,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: BAC.soft,
+    borderWidth: 1,
+    borderColor: BAC.border,
+  },
+  chipActive: {
+    backgroundColor: BAC.primary,
+    borderColor: BAC.primary,
+  },
+  chipText: {
+    fontSize: 12,
+    fontWeight: "900",
+    color: BAC.primary,
+  },
+  chipTextActive: { color: "#fff" },
+
+  locationCard: {
+    marginTop: 8,
+    backgroundColor: BAC.soft,
+    borderWidth: 1,
+    borderColor: BAC.border,
+    borderRadius: 12,
+    padding: 12,
+  },
+  locationText: { fontSize: 13, fontWeight: "900", color: BAC.text },
+  locationHint: {
+    marginTop: 4,
+    fontSize: 12,
+    color: BAC.muted,
+    fontWeight: "800",
+  },
+  mutedSmall: { marginTop: 8, fontSize: 12, color: BAC.muted },
+
   divider: {
     marginTop: 12,
     marginBottom: 4,
