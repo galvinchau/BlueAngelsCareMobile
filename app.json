@@ -3,7 +3,7 @@
     "name": "Blue Angels Care Mobile",
     "slug": "blue-angels-care-mobile",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "dafault",
     "icon": "./assets/bac-logo.png",
     "splash": {
       "image": "./assets/splash.png",
