@@ -118,6 +118,30 @@ export async function getTodayShifts(
 }
 
 /**
+ * ✅ NEW: Get 3-week window shifts (Prev week + Current week + Next week)
+ * GET /mobile/shifts/window?staffId=...&date=YYYY-MM-DD
+ */
+export async function getShiftsWindow(
+  staffId: string,
+  date: string
+): Promise<MobileShift[]> {
+  const url = `${BACKEND_BASE_URL}/mobile/shifts/window?staffId=${encodeURIComponent(
+    staffId
+  )}&date=${encodeURIComponent(date)}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await readBodySafe(res);
+    throw new Error(
+      `getShiftsWindow failed (${res.status}): ${body || res.statusText}`
+    );
+  }
+
+  const data = await res.json();
+  return data?.shifts ?? [];
+}
+
+/**
  * ✅ NEW: Get today's shifts (by individual) for Client Detail
  * GET /mobile/individuals/:id/shifts/today?date=YYYY-MM-DD&staffId=optional
  */

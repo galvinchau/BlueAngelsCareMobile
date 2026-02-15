@@ -15,7 +15,7 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 
 import type { MainDrawerParamList, RootStackParamList } from "../../App";
 import type { MobileShift } from "../types/mobileApi";
-import { getTodayShifts } from "../api/mobileClient";
+import { getShiftsWindow } from "../api/mobileClient";
 
 /**
  * Return YYYY-MM-DD based on device local time (Pennsylvania)
@@ -34,23 +34,83 @@ type HomeScreenProps = NativeStackScreenProps<
 > &
   any;
 
+type TabKey = "UPCOMING" | "PAST";
+
+function parseYMD(ymd: string): Date {
+  // ymd: YYYY-MM-DD
+  const [y, m, d] = ymd.split("-").map((x) => Number(x));
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+function formatDateHeader(ymd: string, todayYmd: string): string {
+  if (ymd === todayYmd) return "Today";
+
+  const dt = parseYMD(ymd);
+  const todayDt = parseYMD(todayYmd);
+
+  const oneDay = 24 * 60 * 60 * 1000;
+  const diffDays = Math.round((dt.getTime() - todayDt.getTime()) / oneDay);
+
+  if (diffDays === -1) return "Yesterday";
+  if (diffDays === 1) return "Tomorrow";
+
+  const weekday = dt.toLocaleDateString("en-US", { weekday: "long" });
+  return weekday;
+}
+
+function formatDateRight(ymd: string): string {
+  const dt = parseYMD(ymd);
+  return dt.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function sortByDateTimeAsc(a: MobileShift, b: MobileShift) {
+  // date is YYYY-MM-DD, time HH:mm
+  const aKey = `${a.date} ${a.scheduleStart || "00:00"}`;
+  const bKey = `${b.date} ${b.scheduleStart || "00:00"}`;
+  return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+}
+
+function sortByDateTimeDesc(a: MobileShift, b: MobileShift) {
+  const aKey = `${a.date} ${a.scheduleStart || "00:00"}`;
+  const bKey = `${b.date} ${b.scheduleStart || "00:00"}`;
+  return aKey > bKey ? -1 : aKey < bKey ? 1 : 0;
+}
+
+function groupByDate(shifts: MobileShift[]): Array<{ date: string; items: MobileShift[] }> {
+  const map = new Map<string, MobileShift[]>();
+  for (const s of shifts) {
+    const key = s.date || "";
+    if (!key) continue;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(s);
+  }
+
+  const dates = Array.from(map.keys()).sort(); // ascending by date
+  return dates.map((d) => ({
+    date: d,
+    items: (map.get(d) || []).sort(sortByDateTimeAsc),
+  }));
+}
+
 export default function HomeScreen({ route, navigation }: HomeScreenProps) {
   const { staffId, staffName, staffEmail } = route.params || {};
 
   const [loading, setLoading] = useState(false);
   const [shifts, setShifts] = useState<MobileShift[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<TabKey>("UPCOMING");
 
   // ✅ IMPORTANT: local date, not UTC
   const todayStr = useMemo(() => getLocalDateYYYYMMDD(), []);
 
-  // Load today's shifts mỗi lần màn hình được focus
+  // Load 3-week window shifts mỗi lần màn hình được focus
   useFocusEffect(
     useCallback(() => {
-      if (!staffId) {
-        // Nếu vì lý do gì đó không có staffId thì không call API
-        return;
-      }
+      if (!staffId) return;
 
       let isActive = true;
 
@@ -59,19 +119,15 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         setError(null);
 
         try {
-          const data = await getTodayShifts(staffId, todayStr);
-          if (isActive) {
-            setShifts(data);
-          }
+          const data = await getShiftsWindow(staffId, todayStr);
+          if (isActive) setShifts(data);
         } catch (e) {
-          console.error("[HomeScreen] load shifts error:", e);
+          console.error("[HomeScreen] load shifts window error:", e);
           if (isActive) {
-            setError("Could not load today's shifts. Please try again later.");
+            setError("Could not load shifts. Please try again later.");
           }
         } finally {
-          if (isActive) {
-            setLoading(false);
-          }
+          if (isActive) setLoading(false);
         }
       }
 
@@ -109,23 +165,59 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
       return;
     }
 
-    if (!shifts || shifts.length === 0) {
+    const upcomingSorted = upcomingShiftsSorted;
+    if (!upcomingSorted || upcomingSorted.length === 0) {
       Alert.alert(
-        "No shifts for today",
-        "You have no shifts scheduled for today. Please contact the office if you think this is a mistake."
+        "No upcoming shifts",
+        "You have no upcoming shifts scheduled. Please contact the office if you think this is a mistake."
       );
       return;
     }
 
-    const firstShift = shifts[0];
-    openShiftDailyNote(firstShift.id);
+    // Open the nearest upcoming shift (today or next)
+    openShiftDailyNote(upcomingSorted[0].id);
   }
 
   function handleOpenMenu() {
     navigation.openDrawer();
   }
 
-  const nextShift = shifts[0];
+  // Split window shifts into PAST / UPCOMING
+  const { pastShiftsSorted, upcomingShiftsSorted } = useMemo(() => {
+    const safe = Array.isArray(shifts) ? shifts : [];
+
+    // NOTE: YYYY-MM-DD string compare works for lexicographic ordering
+    const past = safe.filter((s) => (s.date || "") < todayStr).sort(sortByDateTimeDesc);
+    const upcoming = safe
+      .filter((s) => (s.date || "") >= todayStr)
+      .sort(sortByDateTimeAsc);
+
+    return { pastShiftsSorted: past, upcomingShiftsSorted: upcoming };
+  }, [shifts, todayStr]);
+
+  const activeList = tab === "UPCOMING" ? upcomingShiftsSorted : pastShiftsSorted;
+
+  const grouped = useMemo(() => {
+    if (tab === "UPCOMING") {
+      // For UPCOMING: group ascending date
+      return groupByDate(activeList);
+    }
+    // For PAST: group descending date (most recent first)
+    const map = new Map<string, MobileShift[]>();
+    for (const s of activeList) {
+      const key = s.date || "";
+      if (!key) continue;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(s);
+    }
+    const dates = Array.from(map.keys()).sort().reverse(); // descending
+    return dates.map((d) => ({
+      date: d,
+      items: (map.get(d) || []).sort(sortByDateTimeAsc),
+    }));
+  }, [activeList, tab]);
+
+  const nextUpcoming = upcomingShiftsSorted[0];
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -147,8 +239,9 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
 
       <Text style={styles.description}>
         Quick access to{" "}
-        <Text style={styles.highlight}>today&apos;s shifts</Text> and{" "}
-        <Text style={styles.highlight}>Daily Notes</Text> for DSPs.
+        <Text style={styles.highlight}>Upcoming</Text> and{" "}
+        <Text style={styles.highlight}>Past</Text> shifts, plus{" "}
+        <Text style={styles.highlight}>Daily Notes</Text>.
       </Text>
 
       {/* Shift summary */}
@@ -156,51 +249,125 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         {loading ? (
           <View style={styles.summaryRow}>
             <ActivityIndicator color="#a5b4fc" />
-            <Text style={styles.summaryText}>
-              {" "}
-              Loading today&apos;s shifts…
-            </Text>
+            <Text style={styles.summaryText}> Loading shifts…</Text>
           </View>
         ) : error ? (
           <Text style={styles.summaryError}>{error}</Text>
-        ) : shifts.length === 0 ? (
-          <Text style={styles.summaryText}>
-            You have no scheduled shifts for today ({todayStr}).
-          </Text>
         ) : (
           <>
-            <Text style={styles.summaryText}>
-              You have{" "}
-              <Text style={styles.summaryHighlight}>{shifts.length}</Text> shift
-              {shifts.length > 1 ? "s" : ""} today.
-            </Text>
+            {/* Tabs (UPCOMING / PAST) */}
+            <View style={styles.tabsRow}>
+              <TouchableOpacity
+                style={[
+                  styles.tabBtn,
+                  tab === "UPCOMING" ? styles.tabBtnActive : null,
+                ]}
+                onPress={() => setTab("UPCOMING")}
+              >
+                <Text
+                  style={[
+                    styles.tabText,
+                    tab === "UPCOMING" ? styles.tabTextActive : null,
+                  ]}
+                >
+                  UPCOMING
+                </Text>
+              </TouchableOpacity>
 
-            {nextShift && (
-              <Text style={styles.nextShiftText}>
-                Next shift: {nextShift.serviceName} • {nextShift.scheduleStart}{" "}
-                – {nextShift.scheduleEnd}
-              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.tabBtn,
+                  tab === "PAST" ? styles.tabBtnActive : null,
+                ]}
+                onPress={() => setTab("PAST")}
+              >
+                <Text
+                  style={[
+                    styles.tabText,
+                    tab === "PAST" ? styles.tabTextActive : null,
+                  ]}
+                >
+                  PAST
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Counts + Next shift */}
+            {tab === "UPCOMING" ? (
+              <>
+                {upcomingShiftsSorted.length === 0 ? (
+                  <Text style={styles.summaryText}>
+                    You have no upcoming shifts in the current 3-week window.
+                  </Text>
+                ) : (
+                  <>
+                    <Text style={styles.summaryText}>
+                      You have{" "}
+                      <Text style={styles.summaryHighlight}>
+                        {upcomingShiftsSorted.length}
+                      </Text>{" "}
+                      upcoming shift{upcomingShiftsSorted.length > 1 ? "s" : ""}.
+                    </Text>
+
+                    {nextUpcoming && (
+                      <Text style={styles.nextShiftText}>
+                        Next shift: {nextUpcoming.serviceName} •{" "}
+                        {nextUpcoming.scheduleStart} – {nextUpcoming.scheduleEnd}
+                      </Text>
+                    )}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {pastShiftsSorted.length === 0 ? (
+                  <Text style={styles.summaryText}>
+                    You have no past shifts in the current 3-week window.
+                  </Text>
+                ) : (
+                  <Text style={styles.summaryText}>
+                    You have{" "}
+                    <Text style={styles.summaryHighlight}>
+                      {pastShiftsSorted.length}
+                    </Text>{" "}
+                    past shift{pastShiftsSorted.length > 1 ? "s" : ""}.
+                  </Text>
+                )}
+              </>
             )}
 
-            {/* ✅ NEW: list all shifts */}
+            {/* List grouped by date */}
             <View style={styles.shiftList}>
-              {shifts.map((s) => (
-                <TouchableOpacity
-                  key={s.id}
-                  style={styles.shiftRow}
-                  onPress={() => openShiftDailyNote(s.id)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.shiftTitle}>
-                      {s.individualName ?? "Individual"} •{" "}
-                      {s.serviceName ?? "Service"}
+              {grouped.map((g) => (
+                <View key={g.date} style={styles.dayGroup}>
+                  <View style={styles.dayHeaderRow}>
+                    <Text style={styles.dayHeaderLeft}>
+                      {formatDateHeader(g.date, todayStr)}
                     </Text>
-                    <Text style={styles.shiftSub}>
-                      {s.scheduleStart} – {s.scheduleEnd}
+                    <Text style={styles.dayHeaderRight}>
+                      {formatDateRight(g.date)}
                     </Text>
                   </View>
-                  <Text style={styles.shiftAction}>Open</Text>
-                </TouchableOpacity>
+
+                  {g.items.map((s) => (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={styles.shiftRow}
+                      onPress={() => openShiftDailyNote(s.id)}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.shiftTitle}>
+                          {s.individualName ?? "Individual"} •{" "}
+                          {s.serviceName ?? "Service"}
+                        </Text>
+                        <Text style={styles.shiftSub}>
+                          {s.scheduleStart} – {s.scheduleEnd}
+                        </Text>
+                      </View>
+                      <Text style={styles.shiftAction}>Open</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               ))}
             </View>
           </>
@@ -320,12 +487,64 @@ const styles = StyleSheet.create({
   nextShiftText: {
     fontSize: 14,
     color: "#a5b4fc",
-    marginTop: 4,
+    marginTop: 6,
   },
+
+  // Tabs
+  tabsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 10,
+  },
+  tabBtn: {
+    flex: 1,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#334155",
+    paddingVertical: 10,
+    alignItems: "center",
+    backgroundColor: "#020617",
+  },
+  tabBtnActive: {
+    backgroundColor: "#0b1120",
+    borderColor: "#93c5fd",
+  },
+  tabText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#94a3b8",
+    letterSpacing: 0.5,
+  },
+  tabTextActive: {
+    color: "#93c5fd",
+  },
+
+  // Groups
   shiftList: {
     marginTop: 12,
+    gap: 14,
+  },
+  dayGroup: {
     gap: 8,
   },
+  dayHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    paddingHorizontal: 2,
+  },
+  dayHeaderLeft: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#e5e7eb",
+  },
+  dayHeaderRight: {
+    fontSize: 13,
+    color: "#94a3b8",
+    fontWeight: "700",
+  },
+
+  // Cards
   shiftRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -352,6 +571,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginLeft: 12,
   },
+
   primaryButton: {
     width: "100%",
     backgroundColor: "#22c55e",
