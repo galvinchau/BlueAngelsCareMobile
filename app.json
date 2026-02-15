@@ -20,7 +20,7 @@
       }
     },
     "android": {
-      "package": "org.blueangelscare.mobile"
+      "package": "org.blueangelscare.mobile",
       "versionCode": 13
     },
     "extra": {
