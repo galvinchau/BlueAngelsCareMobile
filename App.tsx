@@ -29,6 +29,12 @@ import ClientDetailScreen from "./src/screens/ClientDetailScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import HelpScreen from "./src/screens/HelpScreen";
 
+// ✅ NEW: Visit Tabs screen
+import VisitTabsScreen from "./src/screens/VisitTabsScreen";
+
+// ✅ NEW: Health & Incident screen
+import HealthIncidentScreen from "./src/screens/HealthIncidentScreen";
+
 // auto-login helpers
 import { getRefreshToken } from "./src/auth/authStorage";
 import { refreshLogin } from "./src/api/mobileAuthApi";
@@ -58,7 +64,18 @@ export type MainDrawerParamList = {
         staffEmail?: string;
       }
     | undefined;
+
   Clients: undefined;
+
+  // ✅ NEW: Health & Incident
+  HealthIncident:
+    | {
+        staffId?: string;
+        staffName?: string;
+        staffEmail?: string;
+      }
+    | undefined;
+
   DailyNote:
     | {
         shiftId?: string;
@@ -67,6 +84,19 @@ export type MainDrawerParamList = {
         staffEmail?: string;
       }
     | undefined;
+
+  // ✅ NEW: Open Shift -> Tabs
+  VisitTabs:
+    | {
+        shiftId?: string;
+        shift?: any; // MobileShift (kept as any to avoid cross-import in App.tsx)
+        staffId?: string;
+        staffName?: string;
+        staffEmail?: string;
+        initialTab?: "CHECK" | "MEDICATION" | "POC" | "DAILY_NOTE";
+      }
+    | undefined;
+
   Settings: undefined;
   Help: undefined;
 };
@@ -180,10 +210,19 @@ function MainDrawerNavigator({ route }: MainDrawerNavProps) {
         initialParams={{ staffId, staffName, staffEmail }}
       />
 
+      {/* Keep existing Daily Note in menu (no change) */}
       <Drawer.Screen
         name="DailyNote"
         component={DailyNoteScreen}
         options={{ title: "Daily Note" }}
+        initialParams={{ staffId, staffName, staffEmail }}
+      />
+
+      {/* ✅ NEW: Tabs screen (Open Shift) */}
+      <Drawer.Screen
+        name="VisitTabs"
+        component={VisitTabsScreen}
+        options={{ title: "Visit" }}
         initialParams={{ staffId, staffName, staffEmail }}
       />
 
@@ -192,6 +231,14 @@ function MainDrawerNavigator({ route }: MainDrawerNavProps) {
         name="Clients"
         component={ClientsStackNavigator}
         options={{ headerShown: false, title: "Clients" }}
+      />
+
+      {/* ✅ NEW: Health & Incident under Clients */}
+      <Drawer.Screen
+        name="HealthIncident"
+        component={HealthIncidentScreen}
+        options={{ title: "Health & Incident" }}
+        initialParams={{ staffId, staffName, staffEmail }}
       />
 
       <Drawer.Screen

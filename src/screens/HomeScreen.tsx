@@ -80,7 +80,9 @@ function sortByDateTimeDesc(a: MobileShift, b: MobileShift) {
   return aKey > bKey ? -1 : aKey < bKey ? 1 : 0;
 }
 
-function groupByDate(shifts: MobileShift[]): Array<{ date: string; items: MobileShift[] }> {
+function groupByDate(
+  shifts: MobileShift[]
+): Array<{ date: string; items: MobileShift[] }> {
   const map = new Map<string, MobileShift[]>();
   for (const s of shifts) {
     const key = s.date || "";
@@ -139,23 +141,26 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     }, [staffId, todayStr])
   );
 
-  function openShiftDailyNote(shiftId: string) {
+  // ✅ NEW: Open shift -> VisitTabs (default tab Daily Note)
+  function openShift(shiftId: string) {
     if (!staffId) {
       Alert.alert(
         "Missing staff info",
-        "Cannot open Daily Note because staff information is missing."
+        "Cannot open shift because staff information is missing."
       );
       return;
     }
 
-    navigation.navigate("DailyNote", {
+    navigation.navigate("VisitTabs", {
       shiftId,
       staffId,
       staffName,
       staffEmail,
+      initialTab: "DAILY_NOTE",
     });
   }
 
+  // keep existing menu Daily Note quick-open behavior
   function handleOpenDailyNote() {
     if (!staffId) {
       Alert.alert(
@@ -175,7 +180,12 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     }
 
     // Open the nearest upcoming shift (today or next)
-    openShiftDailyNote(upcomingSorted[0].id);
+    navigation.navigate("DailyNote", {
+      shiftId: upcomingSorted[0].id,
+      staffId,
+      staffName,
+      staffEmail,
+    });
   }
 
   function handleOpenMenu() {
@@ -187,7 +197,9 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     const safe = Array.isArray(shifts) ? shifts : [];
 
     // NOTE: YYYY-MM-DD string compare works for lexicographic ordering
-    const past = safe.filter((s) => (s.date || "") < todayStr).sort(sortByDateTimeDesc);
+    const past = safe
+      .filter((s) => (s.date || "") < todayStr)
+      .sort(sortByDateTimeDesc);
     const upcoming = safe
       .filter((s) => (s.date || "") >= todayStr)
       .sort(sortByDateTimeAsc);
@@ -353,7 +365,7 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
                     <TouchableOpacity
                       key={s.id}
                       style={styles.shiftRow}
-                      onPress={() => openShiftDailyNote(s.id)}
+                      onPress={() => openShift(s.id)}
                     >
                       <View style={{ flex: 1 }}>
                         <Text style={styles.shiftTitle}>
@@ -375,10 +387,7 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
       </View>
 
       {/* Actions */}
-      <TouchableOpacity
-        style={styles.primaryButton}
-        onPress={handleOpenDailyNote}
-      >
+      <TouchableOpacity style={styles.primaryButton} onPress={handleOpenDailyNote}>
         <Text style={styles.primaryButtonText}>Open Daily Note</Text>
       </TouchableOpacity>
 

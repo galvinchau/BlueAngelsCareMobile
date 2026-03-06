@@ -5,7 +5,7 @@ import type {
   MobileDailyNotePayload,
 } from "../types/mobileApi";
 
-const BACKEND_BASE_URL = "https://blueangelscareapi.onrender.com";
+import { BACKEND_BASE_URL } from "../config";
 
 /**
  * Mobile Individual (lite) for Clients search

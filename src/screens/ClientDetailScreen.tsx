@@ -140,11 +140,15 @@ export default function ClientDetailScreen({ route, navigation }: Props) {
   }, [individual.id]);
 
   /**
-   * ✅ Tap shift -> open Daily Note tab (Drawer route)
+   * ✅ Tap shift -> open Visit Tabs (Drawer route)
    * Works even if ClientDetail is inside a nested Stack.
    */
-  const goToDailyNote = (shiftId: string) => {
-    const params: any = { shiftId };
+  const goToVisitTabs = (shift: MobileShift) => {
+    const params: any = {
+      shiftId: shift.id,
+      shift,
+      initialTab: "DAILY_NOTE", // From Client page, default open Daily Note
+    };
 
     // if staffId existed in route params (optional future), pass along
     const maybeStaffId = (route.params as any)?.staffId;
@@ -158,7 +162,7 @@ export default function ClientDetailScreen({ route, navigation }: Props) {
     try {
       const parentNav: any = (navigation as any).getParent?.();
       if (parentNav?.navigate) {
-        parentNav.navigate("DailyNote", params);
+        parentNav.navigate("VisitTabs", params);
         return;
       }
     } catch {
@@ -167,21 +171,50 @@ export default function ClientDetailScreen({ route, navigation }: Props) {
 
     // Fallback: direct navigate (may work depending on setup)
     try {
-      (navigation as any).navigate("DailyNote", params);
+      (navigation as any).navigate("VisitTabs", params);
     } catch {
       Alert.alert(
-        "Daily Note",
-        "Unable to open Daily Note screen from here. Please open Daily Note from the menu."
+        "Visit",
+        "Unable to open Visit screen from here. Please open the shift from Visits."
       );
     }
   };
 
   /**
-   * ✅ After created Unknown Visit shift -> open DailyNote
+   * ✅ After created Unknown Visit shift -> open VisitTabs
    */
   const handleUnknownVisitCreated = (shiftId: string) => {
     setUnknownOpen(false);
-    goToDailyNote(shiftId);
+
+    // We only have shiftId here; open VisitTabs and let it refresh from API
+    const params: any = { shiftId, initialTab: "CHECK" };
+
+    // Pass staff info if it exists (optional future)
+    const maybeStaffId = (route.params as any)?.staffId;
+    const maybeStaffName = (route.params as any)?.staffName;
+    const maybeStaffEmail = (route.params as any)?.staffEmail;
+    if (maybeStaffId) params.staffId = maybeStaffId;
+    if (maybeStaffName) params.staffName = maybeStaffName;
+    if (maybeStaffEmail) params.staffEmail = maybeStaffEmail;
+
+    try {
+      const parentNav: any = (navigation as any).getParent?.();
+      if (parentNav?.navigate) {
+        parentNav.navigate("VisitTabs", params);
+        return;
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      (navigation as any).navigate("VisitTabs", params);
+    } catch {
+      Alert.alert(
+        "Visit",
+        "Unable to open Visit screen. Please open the shift from Visits."
+      );
+    }
   };
 
   return (
@@ -246,7 +279,7 @@ export default function ClientDetailScreen({ route, navigation }: Props) {
               {shifts.map((s) => (
                 <Pressable
                   key={s.id}
-                  onPress={() => goToDailyNote(s.id)}
+                  onPress={() => goToVisitTabs(s)}
                   style={({ pressed }) => [
                     styles.shiftCard,
                     pressed && { opacity: 0.92 },
@@ -284,7 +317,7 @@ export default function ClientDetailScreen({ route, navigation }: Props) {
                     </View>
                   )}
 
-                  <Text style={styles.tapHint}>Tap to open Daily Note</Text>
+                  <Text style={styles.tapHint}>Tap to open Visit</Text>
                 </Pressable>
               ))}
             </View>

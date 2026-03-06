@@ -201,8 +201,9 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const [whatWeWorkedOn, setWhatWeWorkedOn] = useState("");
   const [opportunities, setOpportunities] = useState("");
 
-  const [healthNotes, setHealthNotes] = useState("");
-  const [incidentNotes, setIncidentNotes] = useState("");
+  // ✅ REMOVED (Health & Incident moved to new menu later)
+  // const [healthNotes, setHealthNotes] = useState("");
+  // const [incidentNotes, setIncidentNotes] = useState("");
 
   const [mileage, setMileage] = useState("");
   const [isCanceled, setIsCanceled] = useState(false);
@@ -485,16 +486,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       }
     }
 
-    // ✅ DSP signature is REQUIRED
-    if (!dspSignature) {
-      setDspSignatureError("DSP signature is required.");
-      Alert.alert("Daily Note", "Please capture the DSP signature.");
-      return;
-    }
-
-    // ✅ Individual signature is OPTIONAL (no blocking)
-    // If missing, we still allow submit.
-
+    
     setSubmitLoading(true);
     setDspSignatureError(null);
     setIndividualSignatureError(null);
@@ -538,10 +530,9 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
         ? opportunities.trim() || undefined
         : undefined,
 
-      healthNotes: !isCanceled ? healthNotes.trim() || undefined : undefined,
-      incidentNotes: !isCanceled
-        ? incidentNotes.trim() || undefined
-        : undefined,
+      // ✅ REMOVED: Health & Incident fields are no longer part of Daily Note
+      // healthNotes: ...
+      // incidentNotes: ...
 
       // ✅ meals disabled when canceled
       meals: !isCanceled
@@ -552,7 +543,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           }
         : undefined,
 
-      dspSignature: dspSignature,
+      dspSignature: dspSignature || undefined,
 
       // ✅ OPTIONAL: only send if present
       individualSignature: individualSignature || undefined,
@@ -797,7 +788,8 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
         <View style={[styles.card, disabledSectionStyle]}>
           <Text style={styles.sectionTitle}>Service Notes</Text>
 
-          <Text style={styles.fieldLabel}>Today&apos;s plan</Text>
+          {/* ✅ Updated label */}
+          <Text style={styles.fieldLabel}>What opportunities offer?</Text>
           <TextInput
             style={styles.textArea}
             multiline
@@ -831,32 +823,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           />
         </View>
 
-        {/* Health & incident notes */}
-        <View style={[styles.card, disabledSectionStyle]}>
-          <Text style={styles.sectionTitle}>Health & Incident</Text>
-
-          <Text style={styles.fieldLabel}>Health / behavior notes</Text>
-          <TextInput
-            style={styles.textArea}
-            multiline
-            value={healthNotes}
-            onChangeText={setHealthNotes}
-            placeholder="Any changes in health, mood, or behavior today?"
-            placeholderTextColor="#6b7280"
-            editable={!isCanceled}
-          />
-
-          <Text style={styles.fieldLabel}>Incident notes</Text>
-          <TextInput
-            style={styles.textArea}
-            multiline
-            value={incidentNotes}
-            onChangeText={setIncidentNotes}
-            placeholder="Describe any incidents, restraints, or unusual events (if any)."
-            placeholderTextColor="#6b7280"
-            editable={!isCanceled}
-          />
-        </View>
+        {/* ✅ REMOVED: Health & Incident section from Daily Note */}
 
         {/* Meals */}
         <View style={[styles.card, disabledSectionStyle]}>
@@ -914,7 +881,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           <Text style={styles.sectionTitle}>Signatures</Text>
 
           {/* DSP signature */}
-          <Text style={styles.fieldLabel}>DSP Signature</Text>
+          <Text style={styles.fieldLabel}>DSP Signature (optional)</Text>
           <View style={styles.signatureBox}>
             <SignatureCanvas
               ref={dspSignatureRef}
