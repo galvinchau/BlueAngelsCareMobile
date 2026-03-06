@@ -433,7 +433,7 @@ function UnknownVisitModal({
         clientId: clientId.trim() || null,
 
         // defaults
-        serviceCode: "COMP",
+        serviceCode: "W1726",
         clientTime: new Date().toISOString(),
       };
 
