@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import SignatureCanvas from "react-native-signature-canvas";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import type { MainDrawerParamList } from "../../App";
 import type { MobileShift, MobileDailyNotePayload } from "../types/mobileApi";
@@ -43,7 +44,37 @@ type MealInfo = {
   offered: string;
 };
 
+type DailyNoteDraft = {
+  todayPlan: string;
+  whatWeWorkedOn: string;
+  opportunities: string;
+  mileage: string;
+  isCanceled: boolean;
+  cancelReason: string;
+  varianceReason: string;
+  meals: {
+    breakfast: MealInfo;
+    lunch: MealInfo;
+    dinner: MealInfo;
+  };
+};
+
 const TZ = "America/New_York";
+const DAILY_NOTE_DRAFT_PREFIX = "bac_daily_note_draft";
+
+function createEmptyMeals() {
+  return {
+    breakfast: { time: "", had: "", offered: "" },
+    lunch: { time: "", had: "", offered: "" },
+    dinner: { time: "", had: "", offered: "" },
+  };
+}
+
+function buildDraftKey(staffId?: string, shiftId?: string) {
+  return `${DAILY_NOTE_DRAFT_PREFIX}:${staffId || "unknown"}:${
+    shiftId || "unknown"
+  }`;
+}
 
 /**
  * Return YYYY-MM-DD based on device local time (Pennsylvania)
@@ -72,7 +103,6 @@ function formatHHmmInTZ(d: Date, timeZone = TZ): string {
     const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
     return `${hh}:${mm}`;
   } catch {
-    // fallback: device local
     const hh = String(d.getHours()).padStart(2, "0");
     const mm = String(d.getMinutes()).padStart(2, "0");
     return `${hh}:${mm}`;
@@ -92,7 +122,6 @@ function formatVisitTimeForDisplay(
 
   const v = String(value).trim();
 
-  // HH:mm -> display directly (this is the key fix)
   const m = /^(\d{1,2}):(\d{2})$/.exec(v);
   if (m) {
     const hh = String(Number(m[1])).padStart(2, "0");
@@ -100,13 +129,11 @@ function formatVisitTimeForDisplay(
     return `${hh}:${mm}`;
   }
 
-  // ISO -> convert to TZ
   if (v.includes("T")) {
     const dt = new Date(v);
     if (!Number.isNaN(dt.getTime())) return formatHHmmInTZ(dt, TZ);
   }
 
-  // otherwise show raw
   return v;
 }
 
@@ -143,7 +170,6 @@ function extractFriendlyErrorMessage(err: any): string {
 
   const raw = String(err?.message || err);
 
-  // Try to extract JSON body {"message": "..."}
   try {
     const jsonMatch = raw.match(/\{.*\}/);
     if (jsonMatch) {
@@ -152,7 +178,6 @@ function extractFriendlyErrorMessage(err: any): string {
       if (parsed?.message) {
         const msg = String(parsed.message);
 
-        // Office Time Keeping conflict
         if (
           msg.includes("Office Time Keeping") ||
           msg.toLowerCase().includes("time keeping")
@@ -163,7 +188,6 @@ function extractFriendlyErrorMessage(err: any): string {
           );
         }
 
-        // Default backend message (already human readable)
         return msg;
       }
     }
@@ -171,7 +195,6 @@ function extractFriendlyErrorMessage(err: any): string {
     // ignore parse errors
   }
 
-  // Fallback (no JSON)
   if (raw.toLowerCase().includes("time keeping")) {
     return (
       "You are currently checked in for Office Time Keeping.\n\n" +
@@ -201,28 +224,21 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const [whatWeWorkedOn, setWhatWeWorkedOn] = useState("");
   const [opportunities, setOpportunities] = useState("");
 
-  // ✅ REMOVED (Health & Incident moved to new menu later)
-  // const [healthNotes, setHealthNotes] = useState("");
-  // const [incidentNotes, setIncidentNotes] = useState("");
-
   const [mileage, setMileage] = useState("");
   const [isCanceled, setIsCanceled] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
 
-  // ✅ NEW: variance reason (single field for IN/OUT 15+ minutes early/late)
+  // ✅ variance reason (single field for IN/OUT 15+ minutes early/late)
   const [varianceReason, setVarianceReason] = useState("");
 
   const [meals, setMeals] = useState<{
     breakfast: MealInfo;
     lunch: MealInfo;
     dinner: MealInfo;
-  }>({
-    breakfast: { time: "", had: "", offered: "" },
-    lunch: { time: "", had: "", offered: "" },
-    dinner: { time: "", had: "", offered: "" },
-  });
+  }>(createEmptyMeals());
 
   const [submitLoading, setSubmitLoading] = useState(false);
+  const [draftLoading, setDraftLoading] = useState(false);
 
   // ----- Signatures -----
   const [dspSignature, setDspSignature] = useState<string | null>(null);
@@ -237,14 +253,18 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     string | null
   >(null);
 
-  // refs cho canvas chữ ký
   const dspSignatureRef = useRef<any>(null);
   const individualSignatureRef = useRef<any>(null);
+  const loadedDraftKeyRef = useRef<string | null>(null);
 
   const staffId = params.staffId;
   const staffName = params.staffName ?? "";
   const staffEmail = params.staffEmail ?? "";
   const routeShiftId = params.shiftId ?? (params.shift as any)?.id;
+
+  const draftKey = useMemo(() => {
+    return buildDraftKey(staffId, shift?.id ?? routeShiftId);
+  }, [staffId, shift?.id, routeShiftId]);
 
   const headerTitle = useMemo(() => {
     if (!shift) return "Daily Note";
@@ -255,6 +275,29 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     if (!shift) return "";
     return `${shift.serviceName ?? ""}`;
   }, [shift]);
+
+  function resetFormValues() {
+    setTodayPlan("");
+    setWhatWeWorkedOn("");
+    setOpportunities("");
+    setMileage("");
+    setIsCanceled(false);
+    setCancelReason("");
+    setVarianceReason("");
+    setMeals(createEmptyMeals());
+    setDspSignature(null);
+    setIndividualSignature(null);
+    setDspSignatureError(null);
+    setIndividualSignatureError(null);
+
+    try {
+      dspSignatureRef.current?.clearSignature?.();
+    } catch {}
+
+    try {
+      individualSignatureRef.current?.clearSignature?.();
+    } catch {}
+  }
 
   // ------------------------------------------------------------
   // Helper: reload shift từ server
@@ -278,8 +321,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     setErrorMessage(null);
 
     try {
-      // IMPORTANT: local date (PA), not UTC
-      const todayStr = getLocalDateYYYYMMDD(); // yyyy-mm-dd (local)
+      const todayStr = getLocalDateYYYYMMDD();
       const shifts = await getTodayShifts(staffId, todayStr);
 
       console.log(
@@ -317,18 +359,59 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     }
   }
 
-  // khi mở màn hình: load shift
   useEffect(() => {
     reloadShiftFromServer("screen_open");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffId, routeShiftId]);
 
   // ------------------------------------------------------------
+  // Load draft once per shift/staff key
+  // ------------------------------------------------------------
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDraft() {
+      if (!draftKey) return;
+      if (loadedDraftKeyRef.current === draftKey) return;
+
+      try {
+        const raw = await AsyncStorage.getItem(draftKey);
+        if (cancelled) return;
+
+        if (raw) {
+          const parsed = JSON.parse(raw) as Partial<DailyNoteDraft>;
+
+          setTodayPlan(parsed.todayPlan ?? "");
+          setWhatWeWorkedOn(parsed.whatWeWorkedOn ?? "");
+          setOpportunities(parsed.opportunities ?? "");
+          setMileage(parsed.mileage ?? "");
+          setIsCanceled(Boolean(parsed.isCanceled));
+          setCancelReason(parsed.cancelReason ?? "");
+          setVarianceReason(parsed.varianceReason ?? "");
+          setMeals(parsed.meals ?? createEmptyMeals());
+
+          Alert.alert("Draft Loaded", "Your saved draft has been restored.");
+        }
+
+        loadedDraftKeyRef.current = draftKey;
+      } catch (err) {
+        console.error("[DailyNoteScreen] load draft error:", err);
+        loadedDraftKeyRef.current = draftKey;
+      }
+    }
+
+    loadDraft();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draftKey]);
+
+  // ------------------------------------------------------------
   // Cancel mode behavior: lock fields + clear variance reason
   // ------------------------------------------------------------
   useEffect(() => {
     if (isCanceled) {
-      // cancel mode: variance reason not used
       setVarianceReason("");
     }
   }, [isCanceled]);
@@ -338,13 +421,11 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   // ------------------------------------------------------------
   const needsVarianceReason = useMemo(() => {
     if (!shift) return false;
-    if (isCanceled) return false; // cancel doesn't use variance
+    if (isCanceled) return false;
 
-    // only evaluate when we have both schedule and visit times
     const schedStartMin = parseHHmmToMinutes(shift.scheduleStart);
     const schedEndMin = parseHHmmToMinutes(shift.scheduleEnd);
 
-    // visitStart/visitEnd may be HH:mm or ISO
     const visitStartHHmm = shift.visitStart
       ? formatVisitTimeForDisplay(shift.date, shift.visitStart)
       : null;
@@ -427,13 +508,73 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     } catch (e) {
       console.error("[DailyNoteScreen] handleCheckOut error:", e);
 
-      // keep it consistent (hide raw codes)
       const friendly = extractFriendlyErrorMessage(e);
       setErrorMessage(friendly);
       Alert.alert("Unable to Check Out", friendly);
     } finally {
       setCheckoutLoading(false);
     }
+  }
+
+  // ------------------------------------------------------------
+  // Draft handlers
+  // ------------------------------------------------------------
+  async function handleSaveDraft() {
+    if (!staffId || !(shift?.id ?? routeShiftId)) {
+      Alert.alert("Save Draft", "Missing shift or staff information.");
+      return;
+    }
+
+    setDraftLoading(true);
+
+    try {
+      const draft: DailyNoteDraft = {
+        todayPlan,
+        whatWeWorkedOn,
+        opportunities,
+        mileage,
+        isCanceled,
+        cancelReason,
+        varianceReason,
+        meals,
+      };
+
+      await AsyncStorage.setItem(draftKey, JSON.stringify(draft));
+
+      Alert.alert("Save Draft", "Draft saved successfully.");
+    } catch (err) {
+      console.error("[DailyNoteScreen] save draft error:", err);
+      Alert.alert("Save Draft", "Failed to save draft. Please try again.");
+    } finally {
+      setDraftLoading(false);
+    }
+  }
+
+  async function handleClearDraft() {
+    Alert.alert(
+      "Clear Daily Note",
+      "Are you sure you want to clear all current Daily Note fields?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              resetFormValues();
+              await AsyncStorage.removeItem(draftKey);
+              Alert.alert("Clear Daily Note", "Daily Note has been cleared.");
+            } catch (err) {
+              console.error("[DailyNoteScreen] clear draft error:", err);
+              Alert.alert(
+                "Clear Daily Note",
+                "Failed to clear the Daily Note. Please try again."
+              );
+            }
+          },
+        },
+      ]
+    );
   }
 
   // ------------------------------------------------------------
@@ -445,7 +586,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       return;
     }
 
-    // ✅ If NOT canceled, require check-in/out
     if (!isCanceled) {
       if (!shift.visitStart || !shift.visitEnd) {
         Alert.alert(
@@ -456,13 +596,11 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       }
     }
 
-    // ✅ Cancel reason required when canceled
     if (isCanceled && !cancelReason.trim()) {
       Alert.alert("Daily Note", "Please enter a cancel reason.");
       return;
     }
 
-    // ✅ Variance reason required when 15+ minutes early/late
     if (!isCanceled && needsVarianceReason && !varianceReason.trim()) {
       Alert.alert(
         "Daily Note",
@@ -471,7 +609,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       return;
     }
 
-    // ✅ Service notes requirement only when NOT canceled
     if (!isCanceled) {
       if (
         !todayPlan.trim() &&
@@ -486,7 +623,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       }
     }
 
-    
     setSubmitLoading(true);
     setDspSignatureError(null);
     setIndividualSignatureError(null);
@@ -509,7 +645,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       scheduleStart: shift.scheduleStart,
       scheduleEnd: shift.scheduleEnd,
 
-      // keep raw values (backend expects what it returned)
       visitStart: shift.visitStart ?? undefined,
       visitEnd: shift.visitEnd ?? undefined,
 
@@ -517,24 +652,15 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       isCanceled,
       cancelReason: isCanceled ? cancelReason.trim() : undefined,
 
-      // ✅ variance reason (single field)
       varianceReason:
         !isCanceled && needsVarianceReason ? varianceReason.trim() : undefined,
 
-      // ✅ notes only when not canceled
       todayPlan: !isCanceled ? todayPlan.trim() || undefined : undefined,
       whatWeWorkedOn: !isCanceled
         ? whatWeWorkedOn.trim() || undefined
         : undefined,
-      opportunities: !isCanceled
-        ? opportunities.trim() || undefined
-        : undefined,
+      opportunities: !isCanceled ? opportunities.trim() || undefined : undefined,
 
-      // ✅ REMOVED: Health & Incident fields are no longer part of Daily Note
-      // healthNotes: ...
-      // incidentNotes: ...
-
-      // ✅ meals disabled when canceled
       meals: !isCanceled
         ? {
             breakfast: { ...meals.breakfast },
@@ -544,8 +670,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
         : undefined,
 
       dspSignature: dspSignature || undefined,
-
-      // ✅ OPTIONAL: only send if present
       individualSignature: individualSignature || undefined,
     };
 
@@ -554,6 +678,12 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     try {
       const res = await submitDailyNote(payload as any);
       console.log("[DailyNoteScreen] submitDailyNote result:", res);
+
+      try {
+        await AsyncStorage.removeItem(draftKey);
+      } catch (err) {
+        console.error("[DailyNoteScreen] remove draft after submit error:", err);
+      }
 
       Alert.alert(
         "Daily Note",
@@ -615,16 +745,12 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
 
   const disabledSectionStyle = isCanceled ? { opacity: 0.45 } : null;
 
-  // ------------------------------------------------------------
-  //  Render
-  // ------------------------------------------------------------
   return (
     <View style={styles.screen}>
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* Header */}
         <Text style={styles.pageTitle}>Daily Note</Text>
         {headerTitle ? (
           <Text style={styles.pageSubtitle}>
@@ -633,7 +759,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           </Text>
         ) : null}
 
-        {/* Shift Details */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Shift Details</Text>
 
@@ -688,7 +813,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           </View>
         </View>
 
-        {/* Check-in / Check-out buttons */}
         <View style={styles.actionsRow}>
           <TouchableOpacity
             style={[
@@ -728,7 +852,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           <Text style={styles.errorMessage}>{errorMessage}</Text>
         ) : null}
 
-        {/* Mileage + Cancel + Variance */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Mileage & Cancel</Text>
 
@@ -784,11 +907,9 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           )}
         </View>
 
-        {/* Service Notes */}
         <View style={[styles.card, disabledSectionStyle]}>
           <Text style={styles.sectionTitle}>Service Notes</Text>
 
-          {/* ✅ Updated label */}
           <Text style={styles.fieldLabel}>What opportunities offer?</Text>
           <TextInput
             style={styles.textArea}
@@ -823,9 +944,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           />
         </View>
 
-        {/* ✅ REMOVED: Health & Incident section from Daily Note */}
-
-        {/* Meals */}
         <View style={[styles.card, disabledSectionStyle]}>
           <Text style={styles.sectionTitle}>Meals</Text>
 
@@ -876,11 +994,9 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           ))}
         </View>
 
-        {/* Signatures */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Signatures</Text>
 
-          {/* DSP signature */}
           <Text style={styles.fieldLabel}>DSP Signature (optional)</Text>
           <View style={styles.signatureBox}>
             <SignatureCanvas
@@ -901,7 +1017,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
             <Text style={styles.errorMessage}>{dspSignatureError}</Text>
           ) : null}
 
-          {/* Individual signature */}
           <Text style={styles.fieldLabel}>Individual Signature (optional)</Text>
           <View style={styles.signatureBox}>
             <SignatureCanvas
@@ -923,7 +1038,32 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           ) : null}
         </View>
 
-        {/* Submit */}
+        {/* Draft actions */}
+        <View style={styles.draftActionsRow}>
+          <TouchableOpacity
+            style={[
+              styles.draftButton,
+              draftLoading ? styles.buttonDisabled : null,
+            ]}
+            onPress={handleSaveDraft}
+            disabled={draftLoading}
+          >
+            {draftLoading ? (
+              <ActivityIndicator color="#022c22" />
+            ) : (
+              <Text style={styles.draftButtonText}>Save Draft</Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.clearButton}
+            onPress={handleClearDraft}
+            disabled={draftLoading}
+          >
+            <Text style={styles.clearButtonText}>Clear</Text>
+          </TouchableOpacity>
+        </View>
+
         <TouchableOpacity
           style={[
             styles.submitButton,
@@ -939,7 +1079,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           )}
         </TouchableOpacity>
 
-        {/* Back link */}
         <TouchableOpacity
           onPress={() => navigation.navigate("Visits")}
           style={styles.backLinkContainer}
@@ -1111,6 +1250,38 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "#e5e7eb",
     marginBottom: 4,
+  },
+  draftActionsRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  draftButton: {
+    flex: 1,
+    backgroundColor: "#22c55e",
+    paddingVertical: 14,
+    borderRadius: 999,
+    alignItems: "center",
+  },
+  draftButtonText: {
+    color: "#022c22",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  clearButton: {
+    flex: 1,
+    backgroundColor: "#111827",
+    paddingVertical: 14,
+    borderRadius: 999,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#4b5563",
+  },
+  clearButtonText: {
+    color: "#e5e7eb",
+    fontSize: 16,
+    fontWeight: "700",
   },
   submitButton: {
     backgroundColor: "#22c55e",
