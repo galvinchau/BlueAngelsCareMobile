@@ -13,6 +13,7 @@ import {
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { MainDrawerParamList } from "../../App";
 import { useHeaderHeight } from "@react-navigation/elements";
+import { BACKEND_BASE_URL } from "../config";
 
 type Props = NativeStackScreenProps<MainDrawerParamList, "HealthIncident">;
 
@@ -61,8 +62,9 @@ function mmddyyyyToIsoDate(mmddyyyy: string): string | null {
   const mm = Number(m[1]);
   const dd = Number(m[2]);
   const yyyy = Number(m[3]);
-  if (!Number.isFinite(mm) || !Number.isFinite(dd) || !Number.isFinite(yyyy))
+  if (!Number.isFinite(mm) || !Number.isFinite(dd) || !Number.isFinite(yyyy)) {
     return null;
+  }
 
   if (mm < 1 || mm > 12) return null;
   if (dd < 1 || dd > 31) return null;
@@ -72,14 +74,9 @@ function mmddyyyyToIsoDate(mmddyyyy: string): string | null {
 }
 
 function getApiBaseUrl(): string | null {
-  const anyEnv: any = process?.env ?? {};
-  const url =
-    anyEnv.EXPO_PUBLIC_API_URL ||
-    anyEnv.EXPO_PUBLIC_BAC_API_BASE_URL ||
-    null;
-
+  const url = String(BACKEND_BASE_URL || "").trim();
   if (!url) return null;
-  return String(url).trim().replace(/\/+$/, "");
+  return url.replace(/\/+$/, "");
 }
 
 async function postJson(url: string, body: any) {
@@ -91,6 +88,7 @@ async function postJson(url: string, body: any) {
 
   const text = await res.text();
   let json: any = null;
+
   try {
     json = text ? JSON.parse(text) : null;
   } catch {
@@ -144,13 +142,17 @@ function buildWitnessesText(args: {
   const w1n = String(args.witness1Name || "").trim();
   const w1c = String(args.witness1Contact || "").trim();
   if (w1n || w1c) {
-    lines.push([w1n || "Witness 1", w1c ? `(${w1c})` : ""].filter(Boolean).join(" "));
+    lines.push(
+      [w1n || "Witness 1", w1c ? `(${w1c})` : ""].filter(Boolean).join(" ")
+    );
   }
 
   const w2n = String(args.witness2Name || "").trim();
   const w2c = String(args.witness2Contact || "").trim();
   if (w2n || w2c) {
-    lines.push([w2n || "Witness 2", w2c ? `(${w2c})` : ""].filter(Boolean).join(" "));
+    lines.push(
+      [w2n || "Witness 2", w2c ? `(${w2c})` : ""].filter(Boolean).join(" ")
+    );
   }
 
   return lines.join("\n");
@@ -207,17 +209,18 @@ export default function HealthIncidentScreen({ navigation, route }: Props) {
   }
 
   function validateBasic(): string | null {
-    if (!staffId.trim()) return "Missing staffId. Please login again.";
+    if (!String(staffId).trim()) return "Missing staffId. Please login again.";
     if (!reportedByName.trim()) return "Please enter Reported By (Name).";
     if (!incidentDate.trim()) return "Please enter Date of Incident.";
     if (!incidentTime.trim()) return "Please enter Time of Incident.";
     if (!individualName.trim()) return "Please enter Involved Individual Name.";
-    if (selectedTypeList.length === 0)
+    if (selectedTypeList.length === 0) {
       return "Please select at least one Type of Incident.";
+    }
     if (!description.trim()) return "Please enter Detailed Description.";
 
     const api = getApiBaseUrl();
-    if (!api) return "Missing EXPO_PUBLIC_API_URL in app env.";
+    if (!api) return "Missing BACKEND_BASE_URL in app config.";
 
     const iso = mmddyyyyToIsoDate(incidentDate);
     if (!iso) return "Incident Date must be MM/DD/YYYY.";
@@ -244,7 +247,7 @@ export default function HealthIncidentScreen({ navigation, route }: Props) {
     });
 
     const body = {
-      staffId: staffId.trim(),
+      staffId: String(staffId).trim(),
       staffName: reportedByName.trim() || staffName || null,
       staffEmail: reportedByContact.trim() || staffEmail || null,
 
@@ -558,8 +561,6 @@ export default function HealthIncidentScreen({ navigation, route }: Props) {
             placeholderTextColor="#6b7280"
           />
         </View>
-
-        {/* ✅ Removed Supervisor section for DSP */}
 
         <TouchableOpacity
           style={[styles.primaryButton, saving && { opacity: 0.6 }]}
