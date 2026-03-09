@@ -13,7 +13,11 @@
     },
     "production": {
       "autoIncrement": true,
-      "distribution": "store"
+      "distribution": "store",
+      "env": {
+        "EXPO_PUBLIC_BAC_API_BASE_URL": "https://blueangelscareapi.onrender.com",
+        "EXPO_PUBLIC_BAC_WEB_BASE_URL": "https://blueangelscare.org"
+      }
     }
   },
   "submit": {
