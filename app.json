@@ -24,6 +24,7 @@
       "versionCode": 13
     },
     "extra": {
+      "EXPO_PUBLIC_BAC_API_BASE_URL": "https://blueangelscareapi.onrender.com",
       "eas": {
         "projectId": "daffae30-51d9-482b-bde2-e91a65d7c160"
       }
