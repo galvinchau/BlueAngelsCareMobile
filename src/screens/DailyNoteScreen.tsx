@@ -18,9 +18,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { MainDrawerParamList } from "../../App";
 import type { MobileShift, MobileDailyNotePayload } from "../types/mobileApi";
 import {
-  checkInShift,
-  checkOutShift,
-  getTodayShifts,
+  getShiftsWindow,
   submitDailyNote,
 } from "../api/mobileClient";
 
@@ -76,10 +74,6 @@ function buildDraftKey(staffId?: string, shiftId?: string) {
   }`;
 }
 
-/**
- * Return YYYY-MM-DD based on device local time (Pennsylvania)
- * (Avoid UTC date shift when using toISOString().slice(0,10))
- */
 function getLocalDateYYYYMMDD(d = new Date()): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -87,9 +81,6 @@ function getLocalDateYYYYMMDD(d = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
-/**
- * Format Date -> HH:mm in America/New_York
- */
 function formatHHmmInTZ(d: Date, timeZone = TZ): string {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
@@ -109,11 +100,6 @@ function formatHHmmInTZ(d: Date, timeZone = TZ): string {
   }
 }
 
-/**
- * Display visit time safely:
- * - If value is HH:mm => display as-is (DO NOT treat as UTC)
- * - If value is ISO string => convert to America/New_York HH:mm
- */
 function formatVisitTimeForDisplay(
   _dateStr: string | undefined,
   value: string | null | undefined
@@ -149,77 +135,20 @@ function parseHHmmToMinutes(v?: string | null | undefined): number | null {
   return hh * 60 + mm;
 }
 
-/**
- * abs diff in minutes with wrap-around (handle overnight safely)
- * ex: 23:55 vs 00:05 => 10 minutes
- */
 function absDiffMinutesWrap(a: number, b: number): number {
   const diff = Math.abs(a - b);
   return Math.min(diff, 24 * 60 - diff);
 }
 
-/**
- * ✅ Friendly error message (English) for staff
- * - hides "400", JSON, raw errors
- * - maps Office Time Keeping conflict to a clear message
- */
-function extractFriendlyErrorMessage(err: any): string {
-  if (!err) {
-    return "Unable to complete this action. Please try again.";
-  }
-
-  const raw = String(err?.message || err);
-
-  try {
-    const jsonMatch = raw.match(/\{.*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-
-      if (parsed?.message) {
-        const msg = String(parsed.message);
-
-        if (
-          msg.includes("Office Time Keeping") ||
-          msg.toLowerCase().includes("time keeping")
-        ) {
-          return (
-            "You are currently checked in for Office Time Keeping.\n\n" +
-            "Please check out of Office Time Keeping first to avoid overlapping work hours."
-          );
-        }
-
-        return msg;
-      }
-    }
-  } catch {
-    // ignore parse errors
-  }
-
-  if (raw.toLowerCase().includes("time keeping")) {
-    return (
-      "You are currently checked in for Office Time Keeping.\n\n" +
-      "Please check out of Office Time Keeping first to avoid overlapping work hours."
-    );
-  }
-
-  return "Unable to check in. Please try again or contact the office.";
-}
-
 const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const params = route?.params ?? {};
 
-  // ------------------------------------------------------------
-  // Shift + staff info
-  // ------------------------------------------------------------
-  const [shift, setShift] = useState<MobileShift | null>(null);
+  const [shift, setShift] = useState<MobileShift | null>(params.shift ?? null);
   const [loadingShift, setLoadingShift] = useState<boolean>(false);
 
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [checkinLoading, setCheckinLoading] = useState(false);
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
 
-  // ----- Daily note form states -----
   const [todayPlan, setTodayPlan] = useState("");
   const [whatWeWorkedOn, setWhatWeWorkedOn] = useState("");
   const [opportunities, setOpportunities] = useState("");
@@ -228,7 +157,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const [isCanceled, setIsCanceled] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
 
-  // ✅ variance reason (single field for IN/OUT 15+ minutes early/late)
   const [varianceReason, setVarianceReason] = useState("");
 
   const [meals, setMeals] = useState<{
@@ -240,7 +168,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const [submitLoading, setSubmitLoading] = useState(false);
   const [draftLoading, setDraftLoading] = useState(false);
 
-  // ----- Signatures -----
   const [dspSignature, setDspSignature] = useState<string | null>(null);
   const [individualSignature, setIndividualSignature] = useState<string | null>(
     null
@@ -261,6 +188,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   const staffName = params.staffName ?? "";
   const staffEmail = params.staffEmail ?? "";
   const routeShiftId = params.shiftId ?? (params.shift as any)?.id;
+  const initialShiftRef = useRef<MobileShift | null>(params.shift ?? null);
 
   const draftKey = useMemo(() => {
     return buildDraftKey(staffId, shift?.id ?? routeShiftId);
@@ -299,9 +227,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     } catch {}
   }
 
-  // ------------------------------------------------------------
-  // Helper: reload shift từ server
-  // ------------------------------------------------------------
   async function reloadShiftFromServer(reason: string) {
     if (!staffId) {
       console.log(
@@ -310,26 +235,31 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       return;
     }
 
+    const baseDate =
+      shift?.date ?? initialShiftRef.current?.date ?? getLocalDateYYYYMMDD();
+
     console.log(
       "[DailyNoteScreen] reloadShiftFromServer start. Reason:",
       reason,
       "routeShiftId=",
-      routeShiftId
+      routeShiftId,
+      "baseDate=",
+      baseDate
     );
 
     setLoadingShift(true);
     setErrorMessage(null);
 
     try {
-      const todayStr = getLocalDateYYYYMMDD();
-      const shifts = await getTodayShifts(staffId, todayStr);
+      const shifts = await getShiftsWindow(staffId, baseDate);
 
       console.log(
         "[DailyNoteScreen] reloadShiftFromServer got shifts:",
         JSON.stringify(shifts)
       );
 
-      let targetId: string | undefined = routeShiftId ?? shift?.id ?? undefined;
+      const targetId: string | undefined =
+        routeShiftId ?? shift?.id ?? initialShiftRef.current?.id ?? undefined;
 
       let found: MobileShift | null = null;
 
@@ -337,22 +267,17 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
         found = (shifts.find((s) => s.id === targetId) as MobileShift) ?? null;
       }
 
-      if (!found && shifts.length === 1) {
-        found = shifts[0] as MobileShift;
-      }
-
-      if (!found) {
-        setShift(null);
-        setErrorMessage(
-          "No matching shift found for today. Please check your schedule."
-        );
-      } else {
+      if (found) {
         setShift(found);
+      } else {
+        console.log(
+          "[DailyNoteScreen] reloadShiftFromServer: target shift not found, keeping current shift state"
+        );
       }
     } catch (e) {
       console.error("[DailyNoteScreen] reloadShiftFromServer error:", e);
       setErrorMessage(
-        "Failed to load today’s shift. Please pull to refresh or contact the office."
+        "Failed to load shift details. Please pull to refresh or contact the office."
       );
     } finally {
       setLoadingShift(false);
@@ -360,13 +285,16 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
   }
 
   useEffect(() => {
+    if (params.shift) {
+      setShift(params.shift);
+      initialShiftRef.current = params.shift;
+      return;
+    }
+
     reloadShiftFromServer("screen_open");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffId, routeShiftId]);
 
-  // ------------------------------------------------------------
-  // Load draft once per shift/staff key
-  // ------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
 
@@ -407,18 +335,12 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     };
   }, [draftKey]);
 
-  // ------------------------------------------------------------
-  // Cancel mode behavior: lock fields + clear variance reason
-  // ------------------------------------------------------------
   useEffect(() => {
     if (isCanceled) {
       setVarianceReason("");
     }
   }, [isCanceled]);
 
-  // ------------------------------------------------------------
-  //  Compute variance requirement (>= 15 minutes early/late)
-  // ------------------------------------------------------------
   const needsVarianceReason = useMemo(() => {
     if (!shift) return false;
     if (isCanceled) return false;
@@ -451,74 +373,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     return diffIn >= 15 || diffOut >= 15;
   }, [shift, isCanceled]);
 
-  // ------------------------------------------------------------
-  //  Check-in / Check-out handlers
-  // ------------------------------------------------------------
-  async function handleCheckIn() {
-    if (!shift || !staffId) {
-      Alert.alert("Daily Note", "Missing shift or staff information.");
-      return;
-    }
-    if (isCanceled) {
-      Alert.alert("Daily Note", "This shift is marked as cancelled.");
-      return;
-    }
-
-    setCheckinLoading(true);
-    setErrorMessage(null);
-    setStatusMessage(null);
-
-    try {
-      const res: any = await checkInShift(shift.id, staffId);
-      console.log("[DailyNoteScreen] check-in raw response:", res);
-
-      await reloadShiftFromServer("after_check_in");
-      setStatusMessage("Checked in successfully.");
-    } catch (e) {
-      console.error("[DailyNoteScreen] handleCheckIn error:", e);
-
-      const friendly = extractFriendlyErrorMessage(e);
-      setErrorMessage(friendly);
-      Alert.alert("Unable to Check In", friendly);
-    } finally {
-      setCheckinLoading(false);
-    }
-  }
-
-  async function handleCheckOut() {
-    if (!shift || !staffId) {
-      Alert.alert("Daily Note", "Missing shift or staff information.");
-      return;
-    }
-    if (isCanceled) {
-      Alert.alert("Daily Note", "This shift is marked as cancelled.");
-      return;
-    }
-
-    setCheckoutLoading(true);
-    setErrorMessage(null);
-    setStatusMessage(null);
-
-    try {
-      const res: any = await checkOutShift(shift.id, staffId);
-      console.log("[DailyNoteScreen] check-out raw response:", res);
-
-      await reloadShiftFromServer("after_check_out");
-      setStatusMessage("Checked out successfully.");
-    } catch (e) {
-      console.error("[DailyNoteScreen] handleCheckOut error:", e);
-
-      const friendly = extractFriendlyErrorMessage(e);
-      setErrorMessage(friendly);
-      Alert.alert("Unable to Check Out", friendly);
-    } finally {
-      setCheckoutLoading(false);
-    }
-  }
-
-  // ------------------------------------------------------------
-  // Draft handlers
-  // ------------------------------------------------------------
   async function handleSaveDraft() {
     if (!staffId || !(shift?.id ?? routeShiftId)) {
       Alert.alert("Save Draft", "Missing shift or staff information.");
@@ -577,9 +431,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     );
   }
 
-  // ------------------------------------------------------------
-  //  Submit Daily Note (gọi backend)
-  // ------------------------------------------------------------
   async function handleSubmitDailyNote() {
     if (!shift || !staffId) {
       Alert.alert("Daily Note", "Missing shift or staff information.");
@@ -590,7 +441,7 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
       if (!shift.visitStart || !shift.visitEnd) {
         Alert.alert(
           "Daily Note",
-          "Please check in and check out before submitting the Daily Note."
+          "Please complete Check In and Check Out in the Check In/Out tab before submitting the Daily Note."
         );
         return;
       }
@@ -626,6 +477,8 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     setSubmitLoading(true);
     setDspSignatureError(null);
     setIndividualSignatureError(null);
+    setStatusMessage(null);
+    setErrorMessage(null);
 
     const payload: MobileDailyNotePayload & { varianceReason?: string } = {
       shiftId: shift.id,
@@ -723,11 +576,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
     }));
   }
 
-  const canCheckIn =
-    !!shift && shift.status === "NOT_STARTED" && !loadingShift && !isCanceled;
-  const canCheckOut =
-    !!shift && shift.status !== "COMPLETED" && !loadingShift && !isCanceled;
-
   const signatureWebStyle = `
     .m-signature-pad--footer { display: none; margin: 0px; }
     .m-signature-pad { box-shadow: none; border: none; }
@@ -783,6 +631,11 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           </View>
 
           <View style={styles.row}>
+            <Text style={styles.label}>Date</Text>
+            <Text style={styles.value}>{shift?.date ?? "—"}</Text>
+          </View>
+
+          <View style={styles.row}>
             <Text style={styles.label}>Schedule</Text>
             <Text style={styles.value}>
               {shift
@@ -813,44 +666,20 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           </View>
         </View>
 
-        <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={[
-              styles.primaryButton,
-              !canCheckIn || checkinLoading ? styles.buttonDisabled : null,
-            ]}
-            onPress={handleCheckIn}
-            disabled={!canCheckIn || checkinLoading}
-          >
-            {checkinLoading ? (
-              <ActivityIndicator color="#022c22" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Check In</Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.secondaryButton,
-              !canCheckOut || checkoutLoading ? styles.buttonDisabled : null,
-            ]}
-            onPress={handleCheckOut}
-            disabled={!canCheckOut || checkoutLoading}
-          >
-            {checkoutLoading ? (
-              <ActivityIndicator color="#e5e7eb" />
-            ) : (
-              <Text style={styles.secondaryButtonText}>Check Out</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
         {statusMessage ? (
           <Text style={styles.statusMessage}>{statusMessage}</Text>
         ) : null}
         {errorMessage ? (
           <Text style={styles.errorMessage}>{errorMessage}</Text>
         ) : null}
+
+        <View style={styles.infoBox}>
+          <Text style={styles.infoBoxTitle}>Check In / Check Out</Text>
+          <Text style={styles.infoBoxText}>
+            Please use the Check In/Out tab to record visit start and end times.
+            Daily Note will use those times automatically.
+          </Text>
+        </View>
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Mileage & Cancel</Text>
@@ -1038,7 +867,6 @@ const DailyNoteScreen: React.FC<Props> = ({ navigation, route }) => {
           ) : null}
         </View>
 
-        {/* Draft actions */}
         <View style={styles.draftActionsRow}>
           <TouchableOpacity
             style={[
@@ -1126,6 +954,25 @@ const styles = StyleSheet.create({
     borderColor: "#1f2937",
     marginBottom: 16,
   },
+  infoBox: {
+    backgroundColor: "#081126",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#1e3a5f",
+    marginBottom: 16,
+  },
+  infoBoxTitle: {
+    color: "#bfdbfe",
+    fontSize: 15,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  infoBoxText: {
+    color: "#cbd5e1",
+    fontSize: 14,
+    lineHeight: 20,
+  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: "700",
@@ -1143,38 +990,6 @@ const styles = StyleSheet.create({
   value: {
     fontSize: 14,
     color: "#e5e7eb",
-  },
-  actionsRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12,
-    marginBottom: 12,
-  },
-  primaryButton: {
-    flex: 1,
-    backgroundColor: "#22c55e",
-    paddingVertical: 12,
-    borderRadius: 999,
-    alignItems: "center",
-  },
-  primaryButtonText: {
-    color: "#022c22",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  secondaryButton: {
-    flex: 1,
-    backgroundColor: "#111827",
-    paddingVertical: 12,
-    borderRadius: 999,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#4b5563",
-  },
-  secondaryButtonText: {
-    color: "#e5e7eb",
-    fontSize: 16,
-    fontWeight: "600",
   },
   buttonDisabled: {
     opacity: 0.5,

@@ -402,8 +402,8 @@ function UnknownVisitModal({
   const [lastName, setLastName] = useState("");
   const [medicaidId, setMedicaidId] = useState("");
 
-  const [serviceCode, setServiceCode] = useState<"W1726" | "HCSS" | "PCA">(
-    "W1726"
+  const [serviceCode, setServiceCode] = useState<"COMP" | "HCSS" | "PCA">(
+    "COMP"
   );
 
   const [picked, setPicked] = useState<MobileIndividualLite | null>(null);
@@ -416,8 +416,8 @@ function UnknownVisitModal({
   const [groupCode, setGroupCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const SERVICE_OPTIONS: Array<"W1726" | "HCSS" | "PCA"> = [
-    "W1726",
+  const SERVICE_OPTIONS: Array<"COMP" | "HCSS" | "PCA"> = [
+    "COMP",
     "HCSS",
     "PCA",
   ];
@@ -433,7 +433,7 @@ function UnknownVisitModal({
     setFirstName("");
     setLastName("");
     setMedicaidId("");
-    setServiceCode("W1726");
+    setServiceCode("COMP");
     setPicked(null);
     setLocation("");
     setSuggestErr(null);
@@ -529,11 +529,6 @@ function UnknownVisitModal({
 
       const url = `${BACKEND_BASE_URL}/mobile/visits/unknown/start`;
 
-      Alert.alert(
-        "DEBUG Unknown Visit",
-        `serviceCode = ${serviceCode}\nurl = ${url}`
-      );
-      return;
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -623,7 +618,7 @@ function UnknownVisitModal({
             style={[
               styles.secondaryBtn,
               (!canSearch || suggestLoading || submitting) &&
-              styles.secondaryBtnDisabled,
+                styles.secondaryBtnDisabled,
             ]}
           >
             {suggestLoading ? (

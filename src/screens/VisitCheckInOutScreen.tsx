@@ -1,5 +1,5 @@
 // src/screens/VisitCheckInOutScreen.tsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +13,11 @@ import {
 } from "react-native";
 
 import type { MobileShift } from "../types/mobileApi";
-import { checkInShift, checkOutShift, getShiftsWindow } from "../api/mobileClient";
+import {
+  checkInShift,
+  checkOutShift,
+  getShiftsWindow,
+} from "../api/mobileClient";
 
 type Props = {
   navigation: any;
@@ -35,6 +39,50 @@ function getLocalDateYYYYMMDD(d = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
+const TZ = "America/New_York";
+
+function formatHHmmInTZ(d: Date, timeZone = TZ): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    }).formatToParts(d);
+
+    const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+    const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
+    return `${hh}:${mm}`;
+  } catch {
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+}
+
+function formatVisitTimeForDisplay(
+  _dateStr: string | undefined,
+  value: string | null | undefined
+): string {
+  if (!value) return "—";
+
+  const v = String(value).trim();
+
+  const m = /^(\d{1,2}):(\d{2})$/.exec(v);
+  if (m) {
+    const hh = String(Number(m[1])).padStart(2, "0");
+    const mm = String(Number(m[2])).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+
+  if (v.includes("T")) {
+    const dt = new Date(v);
+    if (!Number.isNaN(dt.getTime())) return formatHHmmInTZ(dt, TZ);
+  }
+
+  return v;
+}
+
 type CoordsLite = {
   lat: number;
   lng: number;
@@ -43,7 +91,6 @@ type CoordsLite = {
 };
 
 async function tryGetLocationWithExpo(timeoutMs = 12000): Promise<CoordsLite> {
-  // ✅ runtime require => if expo-location not installed, it throws
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const Location = require("expo-location");
 
@@ -88,19 +135,18 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
 
   const routeShiftId = params.shiftId ?? params.shift?.id;
   const [shift, setShift] = useState<MobileShift | null>(params.shift ?? null);
+  const initialShiftRef = useRef<MobileShift | null>(params.shift ?? null);
 
   const [loadingShift, setLoadingShift] = useState(false);
   const [checkinLoading, setCheckinLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
 
-  // GPS option + data
   const [useGps, setUseGps] = useState(true);
   const [gps, setGps] = useState<CoordsLite | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [gpsReason, setGpsReason] = useState("");
   const [gpsLoading, setGpsLoading] = useState(false);
 
-  // Threshold
   const ACCURACY_BAD_METERS = 200;
 
   const canCheckIn =
@@ -112,15 +158,29 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
   async function refreshShift(reason: string) {
     if (!staffId || !routeShiftId) return;
 
+    const baseDate =
+      shift?.date ?? initialShiftRef.current?.date ?? getLocalDateYYYYMMDD();
+
+    console.log(
+      "[VisitCheckInOut] refreshShift start:",
+      reason,
+      "routeShiftId=",
+      routeShiftId,
+      "baseDate=",
+      baseDate
+    );
+
     setLoadingShift(true);
     try {
-      const today = getLocalDateYYYYMMDD();
-      const window = await getShiftsWindow(staffId, today);
+      const window = await getShiftsWindow(staffId, baseDate);
       const found = window.find((x) => x.id === routeShiftId) || null;
 
-      if (found) setShift(found);
-      else if (!shift) {
-        setShift(null);
+      if (found) {
+        setShift(found);
+      } else {
+        console.log(
+          "[VisitCheckInOut] refreshShift: target shift not found, keeping current shift state"
+        );
       }
     } catch (e: any) {
       console.log("[VisitCheckInOut] refreshShift error:", e?.message || e);
@@ -130,6 +190,12 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
   }
 
   useEffect(() => {
+    if (params.shift) {
+      setShift(params.shift);
+      initialShiftRef.current = params.shift;
+      return;
+    }
+
     refreshShift("screen_open");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffId, routeShiftId]);
@@ -142,10 +208,11 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
       const coords = await tryGetLocationWithExpo(12000);
       setGps(coords);
 
-      // warn low accuracy
       if ((coords.accuracy ?? 0) > ACCURACY_BAD_METERS) {
         setGpsError(
-          `Low GPS accuracy (${Math.round(coords.accuracy || 0)}m). You may proceed without GPS (Reason required).`
+          `Low GPS accuracy (${Math.round(
+            coords.accuracy || 0
+          )}m). You may proceed without GPS (Reason required).`
         );
       }
     } catch (e: any) {
@@ -157,32 +224,19 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
     }
   }
 
-  function mustHaveReason(): boolean {
-    // If GPS is OFF => always require reason
-    if (!useGps) return true;
-
-    // GPS ON but no GPS captured => require reason (if proceeding)
-    if (!gps) return true;
-
-    // Accuracy too bad and user proceeds without using it
-    if ((gps.accuracy ?? 0) > ACCURACY_BAD_METERS) return true;
-
-    return false;
-  }
-
   async function ensureGpsOrReasonBeforeProceed(): Promise<boolean> {
-    // Case: GPS OFF => reason required
     if (!useGps) {
       if (!gpsReason.trim()) {
-        Alert.alert("GPS Reason required", "Please enter a reason for not using GPS.");
+        Alert.alert(
+          "GPS Reason required",
+          "Please enter a reason for not using GPS."
+        );
         return false;
       }
       return true;
     }
 
-    // GPS ON => attempt to get GPS if missing
     if (!gps) {
-      // Try fetch
       try {
         await handleRefreshGPS();
       } catch {
@@ -191,19 +245,23 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
     }
 
     if (gps) {
-      // If accuracy bad => ask user if proceed without GPS
       if ((gps.accuracy ?? 0) > ACCURACY_BAD_METERS) {
         return await new Promise((resolve) => {
           Alert.alert(
             "Low GPS accuracy",
-            `GPS accuracy is low (${Math.round(gps.accuracy || 0)}m).\n\nDo you want to proceed without GPS? (Reason required)`,
+            `GPS accuracy is low (${Math.round(
+              gps.accuracy || 0
+            )}m).\n\nDo you want to proceed without GPS? (Reason required)`,
             [
-              { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+              {
+                text: "Cancel",
+                style: "cancel",
+                onPress: () => resolve(false),
+              },
               {
                 text: "Proceed",
                 style: "default",
                 onPress: () => {
-                  // require reason
                   if (!gpsReason.trim()) {
                     Alert.alert(
                       "GPS Reason required",
@@ -220,11 +278,9 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
         });
       }
 
-      // GPS OK => proceed
       return true;
     }
 
-    // Still no GPS (permission denied / module missing / timeout)
     return await new Promise((resolve) => {
       Alert.alert(
         "GPS not available",
@@ -298,11 +354,22 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
     return `${shift.individualName} • ${shift.serviceName}`;
   }, [shift]);
 
+  const visitDisplay = useMemo(() => {
+    if (!shift?.visitStart && !shift?.visitEnd) return "—";
+
+    const start = formatVisitTimeForDisplay(shift?.date, shift?.visitStart);
+    const end = formatVisitTimeForDisplay(shift?.date, shift?.visitEnd);
+
+    if (start !== "—" && end !== "—") return `${start} – ${end}`;
+    if (start !== "—") return `${start} – —`;
+    if (end !== "—") return `— – ${end}`;
+    return "—";
+  }, [shift]);
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>{title}</Text>
 
-      {/* Shift Detail (compact) */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Shift Detail</Text>
 
@@ -317,18 +384,13 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
               : "—"
           }
         />
-        <Row label="Status" value={loadingShift ? "Loading..." : statusLabel(shift?.status)} />
         <Row
-          label="Visit"
-          value={
-            shift?.visitStart && shift?.visitEnd
-              ? `${shift.visitStart} – ${shift.visitEnd}`
-              : "—"
-          }
+          label="Status"
+          value={loadingShift ? "Loading..." : statusLabel(shift?.status)}
         />
+        <Row label="Visit" value={visitDisplay} />
       </View>
 
-      {/* GPS */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>GPS</Text>
 
@@ -345,7 +407,10 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
         {useGps ? (
           <>
             <TouchableOpacity
-              style={[styles.btnSecondary, gpsLoading ? styles.btnDisabled : null]}
+              style={[
+                styles.btnSecondary,
+                gpsLoading ? styles.btnDisabled : null,
+              ]}
               onPress={handleRefreshGPS}
               disabled={gpsLoading}
             >
@@ -358,16 +423,10 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
 
             <View style={{ marginTop: 10 }}>
               <Text style={styles.small}>
-                Lat:{" "}
-                <Text style={styles.value}>
-                  {gps ? gps.lat.toFixed(6) : "—"}
-                </Text>
+                Lat: <Text style={styles.value}>{gps ? gps.lat.toFixed(6) : "—"}</Text>
               </Text>
               <Text style={styles.small}>
-                Lng:{" "}
-                <Text style={styles.value}>
-                  {gps ? gps.lng.toFixed(6) : "—"}
-                </Text>
+                Lng: <Text style={styles.value}>{gps ? gps.lng.toFixed(6) : "—"}</Text>
               </Text>
               <Text style={styles.small}>
                 Accuracy:{" "}
@@ -379,7 +438,6 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
 
             {gpsError ? <Text style={styles.warn}>{gpsError}</Text> : null}
 
-            {/* Reason field if GPS missing or bad (optional until proceeding, but helps DSP enter early) */}
             {(gpsError || !gps) ? (
               <>
                 <Text style={styles.label}>Reason (GPS not available)</Text>
@@ -409,12 +467,11 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
         )}
       </View>
 
-      {/* Actions */}
       <View style={styles.actionsRow}>
         <TouchableOpacity
           style={[
             styles.btnPrimary,
-            (!canCheckIn || checkinLoading) ? styles.btnDisabled : null,
+            !canCheckIn || checkinLoading ? styles.btnDisabled : null,
           ]}
           onPress={onCheckIn}
           disabled={!canCheckIn || checkinLoading}
@@ -429,7 +486,7 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
         <TouchableOpacity
           style={[
             styles.btnDark,
-            (!canCheckOut || checkoutLoading) ? styles.btnDisabled : null,
+            !canCheckOut || checkoutLoading ? styles.btnDisabled : null,
           ]}
           onPress={onCheckOut}
           disabled={!canCheckOut || checkoutLoading}
