@@ -2,7 +2,7 @@
   "expo": {
     "name": "Blue Angels Care Mobile",
     "slug": "blue-angels-care-mobile",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "default",
     "icon": "./assets/bac-logo.png",
     "splash": {
@@ -12,16 +12,21 @@
     },
     "ios": {
       "bundleIdentifier": "org.blueangelscare.mobile",
-      "buildNumber": "16",
+      "buildNumber": "20",
       "supportsTablet": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSFaceIDUsageDescription": "Use Face ID to sign in faster and protect your account."
+        "NSFaceIDUsageDescription": "Use Face ID to sign in faster and protect your account.",
+        "NSLocationWhenInUseUsageDescription": "Blue Angels Care uses your location during check-in and check-out to verify visit GPS for service documentation."
       }
     },
     "android": {
       "package": "org.blueangelscare.mobile",
-      "versionCode": 13
+      "versionCode": 14,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     },
     "extra": {
       "EXPO_PUBLIC_BAC_API_BASE_URL": "https://blueangelscareapi.onrender.com",
@@ -29,6 +34,10 @@
         "projectId": "daffae30-51d9-482b-bde2-e91a65d7c160"
       }
     },
-    "plugins": ["expo-secure-store", "expo-local-authentication"]
+    "plugins": [
+      "expo-secure-store",
+      "expo-local-authentication",
+      "expo-location"
+    ]
   }
 }
