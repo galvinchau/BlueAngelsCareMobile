@@ -189,6 +189,12 @@ type PocDailyLogResponse = {
   submittedAt?: string | null;
 };
 
+type GpsCoords = {
+  lat: number;
+  lng: number;
+  accuracy?: number;
+};
+
 // =======================
 // Screen
 // =======================
@@ -218,11 +224,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
     "IDLE" | "PERMISSION_DENIED" | "FETCHING" | "OK" | "FAILED"
   >("IDLE");
   const [gpsText, setGpsText] = useState<string>("—");
-  const [gpsCoords, setGpsCoords] = useState<{
-    lat: number;
-    lng: number;
-    accuracy?: number;
-  } | null>(null);
+  const [gpsCoords, setGpsCoords] = useState<GpsCoords | null>(null);
 
   // Medication state
   const [medLoading, setMedLoading] = useState(false);
@@ -329,18 +331,21 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
       const acc = loc?.coords?.accuracy;
 
       if (typeof lat === "number" && typeof lng === "number") {
-        setGpsStatus("OK");
-        setGpsCoords({
+        const coords: GpsCoords = {
           lat,
           lng,
           accuracy: typeof acc === "number" ? acc : undefined,
-        });
+        };
+
+        setGpsStatus("OK");
+        setGpsCoords(coords);
         setGpsText(
           `Lat ${lat.toFixed(6)}, Lng ${lng.toFixed(6)}${
             typeof acc === "number" ? ` (±${Math.round(acc)}m)` : ""
           }`
         );
-        return { ok: true as const };
+
+        return { ok: true as const, coords };
       }
 
       setGpsStatus("FAILED");
@@ -367,7 +372,13 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
 
       // useGps = true -> try to fetch
       const res = await fetchGps();
-      if (res.ok) return { ok: true as const, mode: "GPS" as const };
+      if (res.ok) {
+        return {
+          ok: true as const,
+          mode: "GPS" as const,
+          coords: res.coords,
+        };
+      }
 
       // GPS fail -> allow bypass but require reason
       Alert.alert(
@@ -408,8 +419,12 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
 
     if (isNoGps) {
       payload.noGpsReason = gpsReason.trim();
-    } else if (gpsCoords) {
-      payload.gps = gpsCoords; // { lat, lng, accuracy? }
+    } else if (gate.mode === "GPS" && gate.coords) {
+      payload.gpsLatitude = gate.coords.lat;
+      payload.gpsLongitude = gate.coords.lng;
+      if (typeof gate.coords.accuracy === "number") {
+        payload.gpsAccuracy = gate.coords.accuracy;
+      }
     }
 
     const url = `${BACKEND_BASE_URL}/mobile/shifts/${encodeURIComponent(
@@ -761,7 +776,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
 
   const POCStatusButton = ({
     label,
-    value,
     active,
     disabled,
     onPress,
@@ -1031,7 +1045,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
             )}
           </View>
 
-          {/* ✅ Medication Record Modal (Scrollable + Keyboard-safe) */}
           <Modal
             visible={medModalOpen}
             animationType="slide"
@@ -1610,7 +1623,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 16,
     borderWidth: 1,
     borderColor: "#1f2937",
-    maxHeight: "90%", // ✅ important for iOS scroll
+    maxHeight: "90%",
   },
   modalHeader: {
     flexDirection: "row",

@@ -165,9 +165,14 @@ export async function getIndividualTodayShifts(params: {
 }
 
 /**
- * ✅ CHECK IN – SEND LOCAL TIME
+ * ✅ CHECK IN – SEND LOCAL TIME + GPS
  */
-export async function checkInShift(shiftId: string, staffId: string) {
+export async function checkInShift(
+  shiftId: string,
+  staffId: string,
+  gpsLatitude?: number,
+  gpsLongitude?: number
+) {
   const url = `${BACKEND_BASE_URL}/mobile/shifts/${shiftId}/check-in`;
 
   const res = await fetch(url, {
@@ -176,6 +181,14 @@ export async function checkInShift(shiftId: string, staffId: string) {
     body: JSON.stringify({
       staffId,
       clientTime: getLocalTimeHHmm(),
+      gpsLatitude:
+        typeof gpsLatitude === "number" && Number.isFinite(gpsLatitude)
+          ? gpsLatitude
+          : undefined,
+      gpsLongitude:
+        typeof gpsLongitude === "number" && Number.isFinite(gpsLongitude)
+          ? gpsLongitude
+          : undefined,
     }),
   });
 
@@ -189,9 +202,14 @@ export async function checkInShift(shiftId: string, staffId: string) {
 }
 
 /**
- * ✅ CHECK OUT – SEND LOCAL TIME
+ * ✅ CHECK OUT – SEND LOCAL TIME + GPS
  */
-export async function checkOutShift(shiftId: string, staffId: string) {
+export async function checkOutShift(
+  shiftId: string,
+  staffId: string,
+  gpsLatitude?: number,
+  gpsLongitude?: number
+) {
   const url = `${BACKEND_BASE_URL}/mobile/shifts/${shiftId}/check-out`;
 
   const res = await fetch(url, {
@@ -200,6 +218,14 @@ export async function checkOutShift(shiftId: string, staffId: string) {
     body: JSON.stringify({
       staffId,
       clientTime: getLocalTimeHHmm(),
+      gpsLatitude:
+        typeof gpsLatitude === "number" && Number.isFinite(gpsLatitude)
+          ? gpsLatitude
+          : undefined,
+      gpsLongitude:
+        typeof gpsLongitude === "number" && Number.isFinite(gpsLongitude)
+          ? gpsLongitude
+          : undefined,
     }),
   });
 

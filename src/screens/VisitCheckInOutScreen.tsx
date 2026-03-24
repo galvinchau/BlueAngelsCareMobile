@@ -1,5 +1,5 @@
 // src/screens/VisitCheckInOutScreen.tsx
-import React, { useEffect, useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -200,7 +200,7 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [staffId, routeShiftId]);
 
-  async function handleRefreshGPS() {
+  async function handleRefreshGPS(): Promise<CoordsLite | null> {
     setGpsLoading(true);
     setGpsError(null);
 
@@ -215,48 +215,53 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
           )}m). You may proceed without GPS (Reason required).`
         );
       }
+
+      return coords;
     } catch (e: any) {
       const msg = String(e?.message || e);
       setGps(null);
       setGpsError(msg);
+      return null;
     } finally {
       setGpsLoading(false);
     }
   }
 
-  async function ensureGpsOrReasonBeforeProceed(): Promise<boolean> {
+  async function ensureGpsOrReasonBeforeProceed(): Promise<CoordsLite | null> {
     if (!useGps) {
       if (!gpsReason.trim()) {
         Alert.alert(
           "GPS Reason required",
           "Please enter a reason for not using GPS."
         );
-        return false;
+        return null;
       }
-      return true;
+      return null;
     }
 
-    if (!gps) {
+    let currentGps = gps;
+
+    if (!currentGps) {
       try {
-        await handleRefreshGPS();
+        currentGps = await handleRefreshGPS();
       } catch {
-        // ignore
+        currentGps = null;
       }
     }
 
-    if (gps) {
-      if ((gps.accuracy ?? 0) > ACCURACY_BAD_METERS) {
+    if (currentGps) {
+      if ((currentGps.accuracy ?? 0) > ACCURACY_BAD_METERS) {
         return await new Promise((resolve) => {
           Alert.alert(
             "Low GPS accuracy",
             `GPS accuracy is low (${Math.round(
-              gps.accuracy || 0
+              currentGps?.accuracy || 0
             )}m).\n\nDo you want to proceed without GPS? (Reason required)`,
             [
               {
                 text: "Cancel",
                 style: "cancel",
-                onPress: () => resolve(false),
+                onPress: () => resolve(null),
               },
               {
                 text: "Proceed",
@@ -267,10 +272,10 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
                       "GPS Reason required",
                       "Please enter a reason to proceed without GPS."
                     );
-                    resolve(false);
+                    resolve(null);
                     return;
                   }
-                  resolve(true);
+                  resolve(null);
                 },
               },
             ]
@@ -278,7 +283,7 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
         });
       }
 
-      return true;
+      return currentGps;
     }
 
     return await new Promise((resolve) => {
@@ -286,7 +291,7 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
         "GPS not available",
         "GPS is not available on this device or there is no signal.\n\nDo you want to proceed without GPS? (Reason required)",
         [
-          { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+          { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
           {
             text: "Proceed",
             style: "default",
@@ -296,10 +301,10 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
                   "GPS Reason required",
                   "Please enter a reason to proceed without GPS."
                 );
-                resolve(false);
+                resolve(null);
                 return;
               }
-              resolve(true);
+              resolve(null);
             },
           },
         ]
@@ -313,12 +318,18 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
       return;
     }
 
-    const ok = await ensureGpsOrReasonBeforeProceed();
-    if (!ok) return;
+    const coords = await ensureGpsOrReasonBeforeProceed();
+    if (useGps && !coords) return;
+    if (!useGps && !gpsReason.trim()) return;
 
     setCheckinLoading(true);
     try {
-      await checkInShift(shift.id, staffId);
+      await checkInShift(
+        shift.id,
+        staffId,
+        coords?.lat,
+        coords?.lng
+      );
       await refreshShift("after_check_in");
       Alert.alert("Check In", "Checked in successfully.");
     } catch (e: any) {
@@ -334,12 +345,18 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
       return;
     }
 
-    const ok = await ensureGpsOrReasonBeforeProceed();
-    if (!ok) return;
+    const coords = await ensureGpsOrReasonBeforeProceed();
+    if (useGps && !coords) return;
+    if (!useGps && !gpsReason.trim()) return;
 
     setCheckoutLoading(true);
     try {
-      await checkOutShift(shift.id, staffId);
+      await checkOutShift(
+        shift.id,
+        staffId,
+        coords?.lat,
+        coords?.lng
+      );
       await refreshShift("after_check_out");
       Alert.alert("Check Out", "Checked out successfully.");
     } catch (e: any) {
@@ -423,10 +440,16 @@ export default function VisitCheckInOutScreen({ navigation, route }: Props) {
 
             <View style={{ marginTop: 10 }}>
               <Text style={styles.small}>
-                Lat: <Text style={styles.value}>{gps ? gps.lat.toFixed(6) : "—"}</Text>
+                Lat:{" "}
+                <Text style={styles.value}>
+                  {gps ? gps.lat.toFixed(6) : "—"}
+                </Text>
               </Text>
               <Text style={styles.small}>
-                Lng: <Text style={styles.value}>{gps ? gps.lng.toFixed(6) : "—"}</Text>
+                Lng:{" "}
+                <Text style={styles.value}>
+                  {gps ? gps.lng.toFixed(6) : "—"}
+                </Text>
               </Text>
               <Text style={styles.small}>
                 Accuracy:{" "}
