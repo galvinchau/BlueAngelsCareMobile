@@ -37,7 +37,6 @@ type HomeScreenProps = NativeStackScreenProps<
 type TabKey = "UPCOMING" | "PAST";
 
 function parseYMD(ymd: string): Date {
-  // ymd: YYYY-MM-DD
   const [y, m, d] = ymd.split("-").map((x) => Number(x));
   return new Date(y, (m || 1) - 1, d || 1);
 }
@@ -68,7 +67,6 @@ function formatDateRight(ymd: string): string {
 }
 
 function sortByDateTimeAsc(a: MobileShift, b: MobileShift) {
-  // date is YYYY-MM-DD, time HH:mm
   const aKey = `${a.date} ${a.scheduleStart || "00:00"}`;
   const bKey = `${b.date} ${b.scheduleStart || "00:00"}`;
   return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
@@ -91,11 +89,15 @@ function groupByDate(
     map.get(key)!.push(s);
   }
 
-  const dates = Array.from(map.keys()).sort(); // ascending by date
+  const dates = Array.from(map.keys()).sort();
   return dates.map((d) => ({
     date: d,
     items: (map.get(d) || []).sort(sortByDateTimeAsc),
   }));
+}
+
+function isShiftActiveOrOpen(shift: MobileShift): boolean {
+  return shift.status === "IN_PROGRESS" || (!!shift.visitStart && !shift.visitEnd);
 }
 
 export default function HomeScreen({ route, navigation }: HomeScreenProps) {
@@ -106,10 +108,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("UPCOMING");
 
-  // ✅ IMPORTANT: local date, not UTC
-  const todayStr = useMemo(() => getLocalDateYYYYMMDD(), []);
-
-  // Load 3-week window shifts mỗi lần màn hình được focus
   useFocusEffect(
     useCallback(() => {
       if (!staffId) return;
@@ -121,6 +119,7 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         setError(null);
 
         try {
+          const todayStr = getLocalDateYYYYMMDD();
           const data = await getShiftsWindow(staffId, todayStr);
           if (isActive) setShifts(data);
         } catch (e) {
@@ -138,10 +137,9 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
       return () => {
         isActive = false;
       };
-    }, [staffId, todayStr])
+    }, [staffId])
   );
 
-  // ✅ NEW: Open shift -> VisitTabs (default tab Daily Note)
   function openShift(shiftId: string) {
     if (!staffId) {
       Alert.alert(
@@ -160,7 +158,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     });
   }
 
-  // keep existing menu Daily Note quick-open behavior
   function handleOpenDailyNote() {
     if (!staffId) {
       Alert.alert(
@@ -170,7 +167,28 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
       return;
     }
 
-    const upcomingSorted = upcomingShiftsSorted;
+    const todayStr = getLocalDateYYYYMMDD();
+    const safe = Array.isArray(shifts) ? shifts : [];
+
+    const activeOpenShift =
+      safe
+        .filter((s) => isShiftActiveOrOpen(s))
+        .sort(sortByDateTimeAsc)[0] || null;
+
+    if (activeOpenShift) {
+      navigation.navigate("DailyNote", {
+        shiftId: activeOpenShift.id,
+        staffId,
+        staffName,
+        staffEmail,
+      });
+      return;
+    }
+
+    const upcomingSorted = safe
+      .filter((s) => (s.date || "") >= todayStr)
+      .sort(sortByDateTimeAsc);
+
     if (!upcomingSorted || upcomingSorted.length === 0) {
       Alert.alert(
         "No upcoming shifts",
@@ -179,7 +197,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
       return;
     }
 
-    // Open the nearest upcoming shift (today or next)
     navigation.navigate("DailyNote", {
       shiftId: upcomingSorted[0].id,
       staffId,
@@ -192,17 +209,24 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     navigation.openDrawer();
   }
 
-  // Split window shifts into PAST / UPCOMING
+  const todayStr = useMemo(() => getLocalDateYYYYMMDD(), [shifts.length]);
+
   const { pastShiftsSorted, upcomingShiftsSorted } = useMemo(() => {
     const safe = Array.isArray(shifts) ? shifts : [];
 
-    // NOTE: YYYY-MM-DD string compare works for lexicographic ordering
-    const past = safe
-      .filter((s) => (s.date || "") < todayStr)
-      .sort(sortByDateTimeDesc);
     const upcoming = safe
-      .filter((s) => (s.date || "") >= todayStr)
+      .filter((s) => {
+        if (isShiftActiveOrOpen(s)) return true;
+        return (s.date || "") >= todayStr;
+      })
       .sort(sortByDateTimeAsc);
+
+    const past = safe
+      .filter((s) => {
+        if (isShiftActiveOrOpen(s)) return false;
+        return (s.date || "") < todayStr;
+      })
+      .sort(sortByDateTimeDesc);
 
     return { pastShiftsSorted: past, upcomingShiftsSorted: upcoming };
   }, [shifts, todayStr]);
@@ -211,10 +235,9 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
 
   const grouped = useMemo(() => {
     if (tab === "UPCOMING") {
-      // For UPCOMING: group ascending date
       return groupByDate(activeList);
     }
-    // For PAST: group descending date (most recent first)
+
     const map = new Map<string, MobileShift[]>();
     for (const s of activeList) {
       const key = s.date || "";
@@ -222,7 +245,8 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(s);
     }
-    const dates = Array.from(map.keys()).sort().reverse(); // descending
+
+    const dates = Array.from(map.keys()).sort().reverse();
     return dates.map((d) => ({
       date: d,
       items: (map.get(d) || []).sort(sortByDateTimeAsc),
@@ -233,7 +257,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      {/* Logo + title */}
       <View style={styles.logoContainer}>
         <Image
           source={require("../../assets/bac-logo.png")}
@@ -250,13 +273,11 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
       ) : null}
 
       <Text style={styles.description}>
-        Quick access to{" "}
-        <Text style={styles.highlight}>Upcoming</Text> and{" "}
+        Quick access to <Text style={styles.highlight}>Upcoming</Text> and{" "}
         <Text style={styles.highlight}>Past</Text> shifts, plus{" "}
         <Text style={styles.highlight}>Daily Notes</Text>.
       </Text>
 
-      {/* Shift summary */}
       <View style={styles.summaryBox}>
         {loading ? (
           <View style={styles.summaryRow}>
@@ -267,7 +288,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
           <Text style={styles.summaryError}>{error}</Text>
         ) : (
           <>
-            {/* Tabs (UPCOMING / PAST) */}
             <View style={styles.tabsRow}>
               <TouchableOpacity
                 style={[
@@ -304,7 +324,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
               </TouchableOpacity>
             </View>
 
-            {/* Counts + Next shift */}
             {tab === "UPCOMING" ? (
               <>
                 {upcomingShiftsSorted.length === 0 ? (
@@ -348,7 +367,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
               </>
             )}
 
-            {/* List grouped by date */}
             <View style={styles.shiftList}>
               {grouped.map((g) => (
                 <View key={g.date} style={styles.dayGroup}>
@@ -375,6 +393,9 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
                         <Text style={styles.shiftSub}>
                           {s.scheduleStart} – {s.scheduleEnd}
                         </Text>
+                        {isShiftActiveOrOpen(s) ? (
+                          <Text style={styles.activeBadge}>Active / Open</Text>
+                        ) : null}
                       </View>
                       <Text style={styles.shiftAction}>Open</Text>
                     </TouchableOpacity>
@@ -386,7 +407,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         )}
       </View>
 
-      {/* Actions */}
       <TouchableOpacity style={styles.primaryButton} onPress={handleOpenDailyNote}>
         <Text style={styles.primaryButtonText}>Open Daily Note</Text>
       </TouchableOpacity>
@@ -395,7 +415,6 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         <Text style={styles.secondaryButtonText}>Open Menu</Text>
       </TouchableOpacity>
 
-      {/* Tips box */}
       <View style={styles.tipsBox}>
         <Text style={styles.tipsTitle}>Tips</Text>
         <Text style={styles.tipsText}>
@@ -499,7 +518,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
 
-  // Tabs
   tabsRow: {
     flexDirection: "row",
     gap: 10,
@@ -528,7 +546,6 @@ const styles = StyleSheet.create({
     color: "#93c5fd",
   },
 
-  // Groups
   shiftList: {
     marginTop: 12,
     gap: 14,
@@ -553,7 +570,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  // Cards
   shiftRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -573,6 +589,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#9ca3af",
     marginTop: 2,
+  },
+  activeBadge: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#22c55e",
   },
   shiftAction: {
     color: "#93c5fd",

@@ -1,5 +1,6 @@
-// src/screens/VisitTabsScreen.tsx
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+// bac-Mobile/BlueAngelscareMobile/src/screens/VisitTabsScreen.tsx
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,12 +18,28 @@ import {
 import { useFocusEffect } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Location from "expo-location";
+import * as Notifications from "expo-notifications";
 
 import type { MainDrawerParamList } from "../../App";
 import type { MobileShift } from "../types/mobileApi";
-import { getTodayShifts } from "../api/mobileClient";
+import {
+  confirmAwake,
+  getShiftsWindow,
+} from "../api/mobileClient";
 import DailyNoteScreen from "./DailyNoteScreen";
 import { BACKEND_BASE_URL } from "../config";
+
+// =======================
+// Notifications handler
+// =======================
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 // =======================
 // Route params
@@ -41,6 +58,28 @@ type Props = NativeStackScreenProps<MainDrawerParamList, "VisitTabs"> & {
 };
 
 type TabKey = "CHECK" | "MEDICATION" | "POC" | "DAILY_NOTE";
+
+type AwakeMonitoringResponse = {
+  enabled: boolean;
+  status: string | null;
+  intervalMinutes: number | null;
+  graceMinutes: number | null;
+  lastConfirmedAt: string | null;
+  nextDueAt: string | null;
+  deadlineAt: string | null;
+  autoCheckedOutAt: string | null;
+  autoCheckoutReason: string | null;
+};
+
+type CheckInOutApiResponse = {
+  status: "OK";
+  mode: "IN" | "OUT";
+  shiftId: string;
+  staffId: string;
+  time: string;
+  timesheetId: string;
+  awakeMonitoring?: AwakeMonitoringResponse;
+};
 
 // =======================
 // Helpers
@@ -94,6 +133,21 @@ function buildLocalIsoDateTime(dateYYYYMMDD: string, timeHHmm: string): string {
   return `${dateYYYYMMDD}T${timeHHmm}:00`;
 }
 
+function formatDateTimeForDisplay(value?: string | null): string {
+  if (!value) return "—";
+
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mi = String(dt.getMinutes()).padStart(2, "0");
+
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
 async function readApiErrorMessage(res: Response): Promise<string> {
   let raw = "";
   try {
@@ -109,8 +163,9 @@ async function readApiErrorMessage(res: Response): Promise<string> {
     if (Array.isArray(msg)) return msg.join("\n");
     if (typeof msg === "string" && msg.trim()) return msg.trim();
 
-    if (typeof data?.error === "string" && data.error.trim())
+    if (typeof data?.error === "string" && data.error.trim()) {
       return data.error.trim();
+    }
     if (typeof data?.statusCode === "number") return `HTTP ${data.statusCode}`;
   } catch {
     // ignore
@@ -127,6 +182,121 @@ async function fetchJsonOrThrow(url: string, init?: RequestInit) {
     throw new Error(msg);
   }
   return res.json();
+}
+
+function buildAwakeBannerText(
+  awakeInfo: AwakeMonitoringResponse | null
+): string | null {
+  if (!awakeInfo?.enabled) return null;
+  if (awakeInfo.autoCheckedOutAt) {
+    return "This shift was auto checked out by the system.";
+  }
+
+  const now = Date.now();
+  const nextDueAt = awakeInfo.nextDueAt ? new Date(awakeInfo.nextDueAt).getTime() : null;
+  const deadlineAt = awakeInfo.deadlineAt ? new Date(awakeInfo.deadlineAt).getTime() : null;
+
+  if (deadlineAt && now > deadlineAt) {
+    return "Awake confirmation is overdue. Please confirm immediately.";
+  }
+
+  if (nextDueAt && now >= nextDueAt) {
+    return "Awake confirmation is due now. Please tap “I am awake”.";
+  }
+
+  return null;
+}
+
+function getAwakeNotificationKey(
+  awakeInfo: AwakeMonitoringResponse | null
+): string | null {
+  if (!awakeInfo?.enabled || awakeInfo.autoCheckedOutAt) return null;
+
+  const now = Date.now();
+  const nextDueAt = awakeInfo.nextDueAt ? new Date(awakeInfo.nextDueAt).getTime() : null;
+  const deadlineAt = awakeInfo.deadlineAt ? new Date(awakeInfo.deadlineAt).getTime() : null;
+
+  if (deadlineAt && now > deadlineAt) return `overdue:${awakeInfo.deadlineAt}`;
+  if (nextDueAt && now >= nextDueAt) return `due:${awakeInfo.nextDueAt}`;
+  return null;
+}
+
+function getAwakeNotificationText(
+  awakeInfo: AwakeMonitoringResponse | null
+): { title: string; body: string } | null {
+  if (!awakeInfo?.enabled || awakeInfo.autoCheckedOutAt) return null;
+
+  const now = Date.now();
+  const nextDueAt = awakeInfo.nextDueAt ? new Date(awakeInfo.nextDueAt).getTime() : null;
+  const deadlineAt = awakeInfo.deadlineAt ? new Date(awakeInfo.deadlineAt).getTime() : null;
+
+  if (deadlineAt && now > deadlineAt) {
+    return {
+      title: "Awake Monitoring Overdue",
+      body: "Please confirm now. Tap “I am awake” immediately.",
+    };
+  }
+
+  if (nextDueAt && now >= nextDueAt) {
+    return {
+      title: "Awake Monitoring Due",
+      body: "Please confirm now by tapping “I am awake”.",
+    };
+  }
+
+  return null;
+}
+
+async function ensureNotificationPermission(): Promise<boolean> {
+  try {
+    const settings = await Notifications.getPermissionsAsync();
+    if (settings.granted || settings.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL) {
+      return true;
+    }
+
+    const requested = await Notifications.requestPermissionsAsync();
+    return Boolean(
+      requested.granted ||
+        requested.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function fireAwakeLocalNotification(
+  title: string,
+  body: string
+): Promise<void> {
+  try {
+    const granted = await ensureNotificationPermission();
+    if (!granted) return;
+
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("awake-monitoring", {
+        name: "Awake Monitoring",
+        importance: Notifications.AndroidImportance.MAX,
+        sound: "default",
+        vibrationPattern: [0, 300, 200, 300],
+        enableVibrate: true,
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+      });
+    }
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        sound: "default",
+        priority: Notifications.AndroidNotificationPriority.MAX,
+      },
+      trigger: null,
+    });
+  } catch (e) {
+    if (__DEV__) {
+      console.log("[VisitTabs] local notification error:", e);
+    }
+  }
 }
 
 // =======================
@@ -204,18 +374,28 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
   const staffName = params.staffName ?? "";
   const staffEmail = params.staffEmail ?? "";
 
-  const shiftId = params.shiftId ?? (params.shift as any)?.id;
+  const routeShiftId = params.shiftId ?? (params.shift as any)?.id;
   const initialTab: TabKey = (params.initialTab as TabKey) || "CHECK";
 
   const [tab, setTab] = useState<TabKey>(initialTab);
 
   // shift
-  const [shift, setShift] = useState<MobileShift | null>(null);
+  const [shift, setShift] = useState<MobileShift | null>(params.shift ?? null);
+  const initialShiftRef = useRef<MobileShift | null>(params.shift ?? null);
   const [loadingShift, setLoadingShift] = useState(false);
 
   // check in/out loading
   const [checkinLoading, setCheckinLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+
+  // Awake Monitoring
+  const [requireAwakeMonitoring, setRequireAwakeMonitoring] = useState(false);
+  const [awakeInfo, setAwakeInfo] = useState<AwakeMonitoringResponse | null>(null);
+  const [currentVisitId, setCurrentVisitId] = useState<string | null>(null);
+  const [awakeConfirmLoading, setAwakeConfirmLoading] = useState(false);
+  const [awakeAlertMessage, setAwakeAlertMessage] = useState<string | null>(null);
+  const lastAwakePopupKeyRef = useRef<string | null>(null);
+  const lastAwakeNotificationKeyRef = useRef<string | null>(null);
 
   // GPS states
   const [useGps, setUseGps] = useState(true);
@@ -249,6 +429,8 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
   });
   const [pocSaving, setPocSaving] = useState(false);
 
+  const effectiveShiftId = shift?.id ?? routeShiftId;
+
   const headerTitle = useMemo(() => {
     const name = shift?.individualName || "Visit";
     const svc = shift?.serviceName ? ` • ${shift.serviceName}` : "";
@@ -257,43 +439,101 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
 
   const canCheckIn = !!shift && shift.status === "NOT_STARTED";
   const canCheckOut = !!shift && shift.status !== "COMPLETED";
+  const canConfirmAwake =
+    !!staffId &&
+    !!currentVisitId &&
+    !!awakeInfo?.enabled &&
+    shift?.status === "IN_PROGRESS" &&
+    !awakeInfo?.autoCheckedOutAt;
 
   const shiftDate = useMemo(() => {
-    // prefer shift.date; fallback local date
     return shift?.date || getLocalDateYYYYMMDD();
   }, [shift?.date]);
+
+  useEffect(() => {
+    ensureNotificationPermission().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (shift?.status === "COMPLETED") {
+      setRequireAwakeMonitoring(false);
+      setCurrentVisitId(null);
+      setAwakeInfo(null);
+      setAwakeAlertMessage(null);
+      lastAwakePopupKeyRef.current = null;
+      lastAwakeNotificationKeyRef.current = null;
+    }
+  }, [shift?.status]);
+
+  useEffect(() => {
+    if (params.shift?.awakeMonitoringEnabled === true) {
+      setRequireAwakeMonitoring(true);
+    }
+  }, [params.shift]);
 
   const reloadShiftFromServer = useCallback(
     async (reason: string) => {
       if (!staffId) return;
+
+      const baseDate =
+        shift?.date ??
+        initialShiftRef.current?.date ??
+        getLocalDateYYYYMMDD();
+
+      const targetId =
+        routeShiftId ??
+        shift?.id ??
+        initialShiftRef.current?.id ??
+        undefined;
+
       setLoadingShift(true);
 
       try {
-        const todayStr = getLocalDateYYYYMMDD();
-        const items = await getTodayShifts(staffId, todayStr);
+        const items = await getShiftsWindow(staffId, baseDate);
 
         let found: MobileShift | null = null;
-        if (shiftId) {
-          found = (items.find((s) => s.id === shiftId) as MobileShift) ?? null;
+        if (targetId) {
+          found = (items.find((s) => s.id === targetId) as MobileShift) ?? null;
         }
-        if (!found && items.length === 1) found = items[0] as MobileShift;
 
-        setShift(found || null);
+        if (found) {
+          setShift(found);
 
-        if (!found) {
-          if (__DEV__)
-            console.log("[VisitTabs] shift not found. reason=", reason);
+          if (found.awakeMonitoringEnabled === true) {
+            setRequireAwakeMonitoring(true);
+          }
+        } else {
+          if (__DEV__) {
+            console.log(
+              "[VisitTabs] target shift not found, keep current shift. reason=",
+              reason,
+              "targetId=",
+              targetId,
+              "baseDate=",
+              baseDate
+            );
+          }
         }
       } catch (e: any) {
-        if (__DEV__)
+        if (__DEV__) {
           console.log("[VisitTabs] reload error:", String(e?.message || e));
-        setShift(null);
+        }
       } finally {
         setLoadingShift(false);
       }
     },
-    [staffId, shiftId]
+    [staffId, routeShiftId, shift?.date, shift?.id]
   );
+
+  useEffect(() => {
+    if (params.shift) {
+      setShift(params.shift);
+      initialShiftRef.current = params.shift;
+      return;
+    }
+
+    reloadShiftFromServer("screen_open");
+  }, [params.shift, reloadShiftFromServer]);
 
   useFocusEffect(
     useCallback(() => {
@@ -305,6 +545,44 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
     setTab(initialTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Awake due watcher (message + popup + local notification with sound)
+  useEffect(() => {
+    const tick = async () => {
+      const msg = buildAwakeBannerText(awakeInfo);
+      setAwakeAlertMessage(msg);
+
+      if (!awakeInfo?.enabled || awakeInfo.autoCheckedOutAt) return;
+
+      const popupKey = getAwakeNotificationKey(awakeInfo);
+      const notif = getAwakeNotificationText(awakeInfo);
+
+      if (
+        popupKey &&
+        notif &&
+        lastAwakePopupKeyRef.current !== popupKey
+      ) {
+        lastAwakePopupKeyRef.current = popupKey;
+        Alert.alert(notif.title, notif.body);
+      }
+
+      if (
+        popupKey &&
+        notif &&
+        lastAwakeNotificationKeyRef.current !== popupKey
+      ) {
+        lastAwakeNotificationKeyRef.current = popupKey;
+        await fireAwakeLocalNotification(notif.title, notif.body);
+      }
+    };
+
+    tick().catch(() => undefined);
+    const id = setInterval(() => {
+      tick().catch(() => undefined);
+    }, 30000);
+
+    return () => clearInterval(id);
+  }, [awakeInfo]);
 
   // =======================
   // GPS fetch helper
@@ -351,7 +629,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
       setGpsStatus("FAILED");
       setGpsText("GPS failed");
       return { ok: false as const, reason: "gps_failed" as const };
-    } catch (e) {
+    } catch {
       setGpsStatus("FAILED");
       setGpsText("GPS failed");
       return { ok: false as const, reason: "gps_failed" as const };
@@ -361,7 +639,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
   // Validate GPS gating rule (DSP can bypass but must provide reason)
   const ensureGpsOrReason = useCallback(
     async (actionLabel: "Check In" | "Check Out") => {
-      // DSP chooses NO GPS -> require reason
       if (!useGps) {
         if (!gpsReason.trim()) {
           Alert.alert(actionLabel, "Please enter a reason if GPS is not used.");
@@ -370,7 +647,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
         return { ok: true as const, mode: "NO_GPS" as const };
       }
 
-      // useGps = true -> try to fetch
       const res = await fetchGps();
       if (res.ok) {
         return {
@@ -380,7 +656,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
         };
       }
 
-      // GPS fail -> allow bypass but require reason
       Alert.alert(
         "GPS unavailable",
         "GPS could not be obtained. You may continue, but a reason is required."
@@ -393,8 +668,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
   );
 
   // =======================
-  // Check In/Out (send GPS mode + reason + coords)
-  // NOTE: Backend must accept these fields. Mobile prepares them now.
+  // Check In/Out
   // =======================
   async function postCheck(action: "check-in" | "check-out") {
     if (!shift || !staffId) {
@@ -417,6 +691,10 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
       gpsMode: isNoGps ? "NO_GPS" : "GPS",
     };
 
+    if (action === "check-in") {
+      payload.awakeMonitoringEnabled = requireAwakeMonitoring === true;
+    }
+
     if (isNoGps) {
       payload.noGpsReason = gpsReason.trim();
     } else if (gate.mode === "GPS" && gate.coords) {
@@ -435,13 +713,28 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
     else setCheckoutLoading(true);
 
     try {
-      await fetchJsonOrThrow(url, {
+      const result = (await fetchJsonOrThrow(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      });
+      })) as CheckInOutApiResponse;
+
+      if (action === "check-in") {
+        setAwakeInfo(result?.awakeMonitoring ?? null);
+        setCurrentVisitId(result?.timesheetId ?? null);
+        setAwakeAlertMessage(null);
+        lastAwakePopupKeyRef.current = null;
+        lastAwakeNotificationKeyRef.current = null;
+      } else {
+        setAwakeInfo(null);
+        setCurrentVisitId(null);
+        setAwakeAlertMessage(null);
+        lastAwakePopupKeyRef.current = null;
+        lastAwakeNotificationKeyRef.current = null;
+      }
 
       await reloadShiftFromServer(`after_${action}`);
+
       Alert.alert(
         action === "check-in" ? "Check In" : "Check Out",
         action === "check-in"
@@ -466,22 +759,49 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
     return postCheck("check-out");
   }
 
+  async function handleConfirmAwake() {
+    if (!staffId) {
+      Alert.alert("Awake Monitoring", "Missing staff information.");
+      return;
+    }
+    if (!currentVisitId) {
+      Alert.alert(
+        "Awake Monitoring",
+        "Current visit ID is not available yet. Please check in again or refresh."
+      );
+      return;
+    }
+
+    setAwakeConfirmLoading(true);
+    try {
+      const result = await confirmAwake(currentVisitId, staffId);
+
+      setAwakeInfo(result.awakeMonitoring ?? null);
+      setAwakeAlertMessage(null);
+      lastAwakePopupKeyRef.current = null;
+      lastAwakeNotificationKeyRef.current = null;
+
+      Alert.alert("Awake Monitoring", "Awake confirmation recorded.");
+    } catch (e: any) {
+      const msg = String(e?.message || e || "Confirm failed");
+      Alert.alert("Awake Monitoring", msg);
+    } finally {
+      setAwakeConfirmLoading(false);
+    }
+  }
+
   // =======================
   // Medication (native)
-  // Endpoints (backend to implement/confirm):
-  //  - GET  /mobile/medications/orders?shiftId=...
-  //  - GET  /mobile/medications/mar?shiftId=...&date=YYYY-MM-DD
-  //  - POST /mobile/medications/mar
   // =======================
   const loadMedication = useCallback(async () => {
-    if (!shiftId || !staffId) return;
+    if (!effectiveShiftId || !staffId) return;
 
     setMedLoading(true);
     setMedErr(null);
 
     try {
       const ordersUrl = `${BACKEND_BASE_URL}/mobile/medications/orders?shiftId=${encodeURIComponent(
-        shiftId
+        effectiveShiftId
       )}`;
       const ordersData = await fetchJsonOrThrow(ordersUrl);
       const orders: MobileMedOrder[] = Array.isArray(ordersData?.orders)
@@ -492,7 +812,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
       setMedOrders(orders);
 
       const marUrl = `${BACKEND_BASE_URL}/mobile/medications/mar?shiftId=${encodeURIComponent(
-        shiftId
+        effectiveShiftId
       )}&date=${encodeURIComponent(shiftDate)}`;
       const marData = await fetchJsonOrThrow(marUrl);
       const logsRaw: MobileMarLog[] = Array.isArray(marData?.logs)
@@ -501,7 +821,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
         ? marData
         : [];
 
-      // group by orderId
       const grouped: Record<string, MobileMarLog[]> = {};
       for (const x of logsRaw) {
         const key = String((x as any)?.orderId || "");
@@ -510,7 +829,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
         grouped[key].push(x);
       }
 
-      // sort newest first per order
       Object.keys(grouped).forEach((k) => {
         grouped[k] = grouped[k].slice().sort((a, b) => {
           const ta = new Date(a.createdAt || 0).getTime();
@@ -529,7 +847,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
     } finally {
       setMedLoading(false);
     }
-  }, [shiftDate, shiftId, staffId]);
+  }, [effectiveShiftId, shiftDate, staffId]);
 
   const openMedRecord = (order: MobileMedOrder) => {
     setMedSelected(order);
@@ -544,7 +862,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
   }, [medStatus]);
 
   const submitMedRecord = async () => {
-    if (!shiftId || !staffId || !shift) {
+    if (!effectiveShiftId || !staffId || !shift) {
       Alert.alert("Medication", "Missing shift or staff information.");
       return;
     }
@@ -561,17 +879,16 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
       return;
     }
 
-    // ✅ Some backends validate scheduledDateTime as ISO datetime.
     const scheduledDateTime = buildLocalIsoDateTime(shiftDate, medTime);
 
     const payload = {
-      shiftId,
+      shiftId: effectiveShiftId,
       staffId,
       individualId: shift.individualId,
       orderId: medSelected.id,
       status: medStatus,
       adminTime: medTime,
-      scheduledDateTime, // ✅ FIX: provide ISO datetime
+      scheduledDateTime,
       note: medNote.trim() || null,
       staffName: staffName || null,
       staffEmail: staffEmail || null,
@@ -600,20 +917,16 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
 
   // =======================
   // POC (native)
-  // Endpoints (backend to implement/confirm):
-  //  - GET  /mobile/poc/duties?shiftId=...
-  //  - GET  /mobile/poc/daily-log?shiftId=...&date=YYYY-MM-DD
-  //  - POST /mobile/poc/daily-log   (save/submit)
   // =======================
   const loadPoc = useCallback(async () => {
-    if (!shiftId || !staffId) return;
+    if (!effectiveShiftId || !staffId) return;
 
     setPocLoading(true);
     setPocErr(null);
 
     try {
       const dutiesUrl = `${BACKEND_BASE_URL}/mobile/poc/duties?shiftId=${encodeURIComponent(
-        shiftId
+        effectiveShiftId
       )}`;
       const dutiesData = await fetchJsonOrThrow(dutiesUrl);
       const duties: PocDuty[] = Array.isArray(dutiesData?.duties)
@@ -624,7 +937,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
       setPocDuties(duties);
 
       const dailyUrl = `${BACKEND_BASE_URL}/mobile/poc/daily-log?shiftId=${encodeURIComponent(
-        shiftId
+        effectiveShiftId
       )}&date=${encodeURIComponent(shiftDate)}`;
       const dailyData = await fetchJsonOrThrow(dailyUrl);
 
@@ -635,7 +948,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
         submittedAt: dailyData?.submittedAt || null,
       };
 
-      // ensure every duty has an item placeholder
       const byDuty: Record<string, PocDailyItem> = {};
       (resp.items || []).forEach((it) => {
         if (it?.pocDutyId) byDuty[String(it.pocDutyId)] = it;
@@ -668,7 +980,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
     } finally {
       setPocLoading(false);
     }
-  }, [shiftDate, shiftId, staffId]);
+  }, [effectiveShiftId, shiftDate, staffId]);
 
   const updatePocItem = (pocDutyId: string, patch: Partial<PocDailyItem>) => {
     setPocDaily((prev) => {
@@ -678,7 +990,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
           ...it,
           ...patch,
         };
-        // auto timestamp when setting status (if not provided)
         if (
           patch.completionStatus &&
           (!next.completedAt || !isHHmm(next.completedAt))
@@ -692,7 +1003,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
   };
 
   const savePoc = async (mode: "DRAFT" | "SUBMITTED") => {
-    if (!shiftId || !staffId || !shift) {
+    if (!effectiveShiftId || !staffId || !shift) {
       Alert.alert("POC", "Missing shift or staff information.");
       return;
     }
@@ -701,7 +1012,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
       return;
     }
 
-    // If submit, require at least 1 completed task before submit.
     if (mode === "SUBMITTED") {
       const hasAny = (pocDaily.items || []).some((x) => !!x.completionStatus);
       if (!hasAny) {
@@ -714,7 +1024,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
     try {
       const url = `${BACKEND_BASE_URL}/mobile/poc/daily-log`;
       const payload = {
-        shiftId,
+        shiftId: effectiveShiftId,
         staffId,
         staffName: staffName || null,
         staffEmail: staffEmail || null,
@@ -814,7 +1124,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
   // =======================
   return (
     <View style={styles.screen}>
-      {/* Top header */}
       <View style={styles.topBar}>
         <Pressable
           onPress={() => navigation.navigate("Visits")}
@@ -835,7 +1144,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
         </View>
       </View>
 
-      {/* Tabs */}
       <View style={styles.tabsRow}>
         <TabButton k="CHECK" label="Check In/Out" />
         <TabButton k="MEDICATION" label="Medication" />
@@ -843,7 +1151,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
         <TabButton k="DAILY_NOTE" label="Daily Note" />
       </View>
 
-      {/* Body */}
       {tab === "CHECK" ? (
         <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
           <View style={styles.card}>
@@ -867,6 +1174,112 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
               label="Status"
               value={loadingShift ? "Loading..." : shift?.status ?? "—"}
             />
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>Awake Monitoring</Text>
+
+            <View style={styles.switchRow}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={styles.fieldLabel}>Require Awake Monitoring</Text>
+                <Text style={styles.helpText}>
+                  If enabled, this shift will require awake confirmation every 60
+                  minutes. Grace period is 10 minutes.
+                </Text>
+              </View>
+
+              <Switch
+                value={requireAwakeMonitoring}
+                onValueChange={setRequireAwakeMonitoring}
+                disabled={!canCheckIn || checkinLoading}
+                thumbColor={requireAwakeMonitoring ? "#22c55e" : "#f9fafb"}
+                trackColor={{ false: "#4b5563", true: "#16a34a" }}
+              />
+            </View>
+
+            <Row
+              label="Selected for next check-in"
+              value={requireAwakeMonitoring ? "ON" : "OFF"}
+            />
+
+            {awakeAlertMessage ? (
+              <View style={styles.awakeAlertBox}>
+                <Text style={styles.awakeAlertText}>{awakeAlertMessage}</Text>
+              </View>
+            ) : null}
+
+            {awakeInfo ? (
+              <View style={{ marginTop: 10 }}>
+                <Row
+                  label="Current monitoring"
+                  value={awakeInfo.enabled ? "ON" : "OFF"}
+                />
+                <Row label="Awake status" value={awakeInfo.status || "—"} />
+                <Row
+                  label="Interval"
+                  value={
+                    awakeInfo.intervalMinutes != null
+                      ? `${awakeInfo.intervalMinutes} minutes`
+                      : "—"
+                  }
+                />
+                <Row
+                  label="Grace"
+                  value={
+                    awakeInfo.graceMinutes != null
+                      ? `${awakeInfo.graceMinutes} minutes`
+                      : "—"
+                  }
+                />
+                <Row
+                  label="Last confirmed"
+                  value={formatDateTimeForDisplay(awakeInfo.lastConfirmedAt)}
+                />
+                <Row
+                  label="Next due"
+                  value={formatDateTimeForDisplay(awakeInfo.nextDueAt)}
+                />
+                <Row
+                  label="Grace until"
+                  value={formatDateTimeForDisplay(awakeInfo.deadlineAt)}
+                />
+                <Row
+                  label="Auto checkout"
+                  value={formatDateTimeForDisplay(awakeInfo.autoCheckedOutAt)}
+                />
+                <Row
+                  label="Auto checkout reason"
+                  value={awakeInfo.autoCheckoutReason || "—"}
+                />
+
+                {canConfirmAwake ? (
+                  <Pressable
+                    onPress={handleConfirmAwake}
+                    disabled={awakeConfirmLoading}
+                    style={[
+                      styles.awakeBtn,
+                      awakeConfirmLoading ? styles.btnDisabled : null,
+                    ]}
+                  >
+                    {awakeConfirmLoading ? (
+                      <ActivityIndicator color="#111827" />
+                    ) : (
+                      <Text style={styles.awakeBtnText}>I am awake</Text>
+                    )}
+                  </Pressable>
+                ) : awakeInfo.enabled ? (
+                  <Text style={styles.mutedText}>
+                    {currentVisitId
+                      ? "Awake confirm is available while this shift is in progress."
+                      : "Awake confirm button will be available after this session check-in response provides the visit ID."}
+                  </Text>
+                ) : null}
+              </View>
+            ) : (
+              <Text style={styles.mutedText}>
+                No awake monitoring data returned yet for this shift.
+              </Text>
+            )}
           </View>
 
           <View style={styles.card}>
@@ -1354,7 +1767,8 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
             key: "DailyNoteTab",
             name: "DailyNote",
             params: {
-              shiftId,
+              shiftId: effectiveShiftId,
+              shift: shift ?? undefined,
               staffId,
               staffName,
               staffEmail,
@@ -1466,6 +1880,13 @@ const styles = StyleSheet.create({
 
   fieldLabel: { fontSize: 13, color: "#9ca3af", fontWeight: "800" },
   mutedText: { marginTop: 6, fontSize: 13, color: "#9ca3af", fontWeight: "700" },
+  helpText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#94a3b8",
+    fontWeight: "700",
+    lineHeight: 18,
+  },
 
   switchRow: {
     flexDirection: "row",
@@ -1547,6 +1968,35 @@ const styles = StyleSheet.create({
   },
   miniBtnText: { color: "#93c5fd", fontWeight: "900", fontSize: 12 },
 
+  awakeBtn: {
+    marginTop: 14,
+    backgroundColor: "#f59e0b",
+    paddingVertical: 12,
+    borderRadius: 999,
+    alignItems: "center",
+  },
+  awakeBtnText: {
+    color: "#111827",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+
+  awakeAlertBox: {
+    marginTop: 12,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "#7f1d1d",
+    borderWidth: 1,
+    borderColor: "#ef4444",
+  },
+  awakeAlertText: {
+    color: "#fee2e2",
+    fontSize: 13,
+    fontWeight: "900",
+    lineHeight: 18,
+  },
+
   btnDisabled: { opacity: 0.5 },
 
   footerHint: {
@@ -1557,7 +2007,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 
-  // list cards
   listCard: {
     backgroundColor: "#0b1120",
     borderWidth: 1,
@@ -1572,7 +2021,6 @@ const styles = StyleSheet.create({
   listMetaK: { color: "#9ca3af", fontWeight: "900", fontSize: 12 },
   listMetaV: { color: "#e5e7eb", fontWeight: "800", fontSize: 12 },
 
-  // loading
   loadingRow: {
     marginTop: 10,
     flexDirection: "row",
@@ -1582,7 +2030,6 @@ const styles = StyleSheet.create({
   loadingText: { fontSize: 13, color: "#9ca3af", fontWeight: "700" },
   warnText: { color: "#f59e0b", fontWeight: "900", fontSize: 13 },
 
-  // pills
   pillsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
   pocPill: {
     paddingHorizontal: 12,
@@ -1599,7 +2046,6 @@ const styles = StyleSheet.create({
   pocPillText: { color: "#94a3b8", fontWeight: "900", fontSize: 12 },
   pocPillTextActive: { color: "#93c5fd" },
 
-  // badges
   badgeRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1608,7 +2054,6 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: "#9ca3af", fontWeight: "900", fontSize: 12 },
 
-  // modal
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.35)",

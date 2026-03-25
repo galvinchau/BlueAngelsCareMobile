@@ -3,6 +3,7 @@ import type {
   MobileShift,
   MobileLoginResult,
   MobileDailyNotePayload,
+  CheckInOutResponse,
 } from "../types/mobileApi";
 
 import { BACKEND_BASE_URL } from "../config";
@@ -17,6 +18,26 @@ export type MobileIndividualLite = {
   address1?: string | null;
   address2?: string | null;
   phone?: string | null;
+};
+
+export type AwakeMonitoringResponse = {
+  enabled: boolean;
+  status: string | null;
+  intervalMinutes: number | null;
+  graceMinutes: number | null;
+  lastConfirmedAt: string | null;
+  nextDueAt: string | null;
+  deadlineAt: string | null;
+  autoCheckedOutAt: string | null;
+  autoCheckoutReason: string | null;
+};
+
+export type AwakeConfirmResponse = {
+  status: "OK";
+  visitId: string;
+  staffId: string;
+  confirmedAt: string;
+  awakeMonitoring: AwakeMonitoringResponse;
 };
 
 /**
@@ -165,14 +186,15 @@ export async function getIndividualTodayShifts(params: {
 }
 
 /**
- * ✅ CHECK IN – SEND LOCAL TIME + GPS
+ * ✅ CHECK IN – SEND LOCAL TIME + GPS + AWAKE MONITORING OPTION
  */
 export async function checkInShift(
   shiftId: string,
   staffId: string,
   gpsLatitude?: number,
-  gpsLongitude?: number
-) {
+  gpsLongitude?: number,
+  awakeMonitoringEnabled?: boolean
+): Promise<CheckInOutResponse> {
   const url = `${BACKEND_BASE_URL}/mobile/shifts/${shiftId}/check-in`;
 
   const res = await fetch(url, {
@@ -189,6 +211,7 @@ export async function checkInShift(
         typeof gpsLongitude === "number" && Number.isFinite(gpsLongitude)
           ? gpsLongitude
           : undefined,
+      awakeMonitoringEnabled: awakeMonitoringEnabled === true,
     }),
   });
 
@@ -209,7 +232,7 @@ export async function checkOutShift(
   staffId: string,
   gpsLatitude?: number,
   gpsLongitude?: number
-) {
+): Promise<CheckInOutResponse> {
   const url = `${BACKEND_BASE_URL}/mobile/shifts/${shiftId}/check-out`;
 
   const res = await fetch(url, {
@@ -235,6 +258,36 @@ export async function checkOutShift(
       `checkOutShift failed (${res.status}): ${body || res.statusText}`
     );
   }
+  return res.json();
+}
+
+/**
+ * ✅ AWAKE CONFIRM
+ * POST /mobile/visits/:visitId/awake-confirm
+ */
+export async function confirmAwake(
+  visitId: string,
+  staffId: string
+): Promise<AwakeConfirmResponse> {
+  const url = `${BACKEND_BASE_URL}/mobile/visits/${encodeURIComponent(
+    visitId
+  )}/awake-confirm`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      staffId,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await readBodySafe(res);
+    throw new Error(
+      `confirmAwake failed (${res.status}): ${body || res.statusText}`
+    );
+  }
+
   return res.json();
 }
 

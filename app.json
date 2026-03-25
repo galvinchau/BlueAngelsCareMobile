@@ -17,7 +17,9 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSFaceIDUsageDescription": "Use Face ID to sign in faster and protect your account.",
-        "NSLocationWhenInUseUsageDescription": "Blue Angels Care uses your location during check-in and check-out to verify visit GPS for service documentation."
+        "NSLocationWhenInUseUsageDescription": "Blue Angels Care uses your location during check-in and check-out to verify visit GPS for service documentation.",
+        "NSUserNotificationUsageDescription": "Blue Angels Care sends reminders and alerts for awake monitoring during active shifts.",
+        "UIBackgroundModes": ["remote-notification"]
       }
     },
     "android": {
@@ -25,8 +27,15 @@
       "versionCode": 15,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION"
+        "ACCESS_FINE_LOCATION",
+        "POST_NOTIFICATIONS",
+        "VIBRATE"
       ]
+    },
+    "notification": {
+      "icon": "./assets/bac-logo.png",
+      "color": "#ffffff",
+      "iosDisplayInForeground": true
     },
     "extra": {
       "EXPO_PUBLIC_BAC_API_BASE_URL": "https://blueangelscareapi.onrender.com",
@@ -37,7 +46,8 @@
     "plugins": [
       "expo-secure-store",
       "expo-local-authentication",
-      "expo-location"
+      "expo-location",
+      "expo-notifications"
     ]
   }
 }

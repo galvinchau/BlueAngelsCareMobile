@@ -2,6 +2,18 @@
 
 export type MobileShiftStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
 
+export interface AwakeMonitoringInfo {
+  enabled: boolean;
+  status: string | null;
+  intervalMinutes: number | null;
+  graceMinutes: number | null;
+  lastConfirmedAt: string | null;
+  nextDueAt: string | null;
+  deadlineAt: string | null;
+  autoCheckedOutAt: string | null;
+  autoCheckoutReason: string | null;
+}
+
 export interface MobileShift {
   id: string;
   date: string;
@@ -20,6 +32,10 @@ export interface MobileShift {
   visitStart?: string | null;
   visitEnd?: string | null;
   outcomeText?: string;
+
+  // ✅ Phase 1 - Awake Monitoring
+  awakeMonitoringEnabled?: boolean;
+  awakeMonitoring?: AwakeMonitoringInfo | null;
 }
 
 export interface MobileDailyNotePayload {
@@ -95,8 +111,17 @@ export interface TimesheetEntry {
 }
 
 export interface CheckInOutResponse {
-  shift: MobileShift;
+  shift?: MobileShift;
   timesheet?: TimesheetEntry;
+
+  status?: "OK";
+  mode?: "IN" | "OUT";
+  shiftId?: string;
+  staffId?: string;
+  time?: string;
+  timesheetId?: string;
+
+  awakeMonitoring?: AwakeMonitoringInfo | null;
 }
 
 // ==== Auth / Login types ====
