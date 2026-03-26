@@ -456,7 +456,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
 
   useEffect(() => {
     if (shift?.status === "COMPLETED") {
-      setRequireAwakeMonitoring(false);
       setCurrentVisitId(null);
       setAwakeInfo(null);
       setAwakeAlertMessage(null);
@@ -466,10 +465,8 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
   }, [shift?.status]);
 
   useEffect(() => {
-    if (params.shift?.awakeMonitoringEnabled === true) {
-      setRequireAwakeMonitoring(true);
-    }
-  }, [params.shift]);
+    setRequireAwakeMonitoring(shift?.awakeMonitoringRequired === true);
+  }, [shift?.awakeMonitoringRequired]);
 
   const reloadShiftFromServer = useCallback(
     async (reason: string) => {
@@ -498,10 +495,6 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
 
         if (found) {
           setShift(found);
-
-          if (found.awakeMonitoringEnabled === true) {
-            setRequireAwakeMonitoring(true);
-          }
         } else {
           if (__DEV__) {
             console.log(
@@ -691,6 +684,7 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
       gpsMode: isNoGps ? "NO_GPS" : "GPS",
     };
 
+    // backward compatible only; backend policy is controlled by Office now
     if (action === "check-in") {
       payload.awakeMonitoringEnabled = requireAwakeMonitoring === true;
     }
@@ -1183,22 +1177,23 @@ export default function VisitTabsScreen({ navigation, route }: Props) {
               <View style={{ flex: 1, paddingRight: 12 }}>
                 <Text style={styles.fieldLabel}>Require Awake Monitoring</Text>
                 <Text style={styles.helpText}>
-                  If enabled, this shift will require awake confirmation every 60
+                  This setting is controlled by Office from Weekly Schedule. If
+                  enabled, this shift will require awake confirmation every 60
                   minutes. Grace period is 10 minutes.
                 </Text>
               </View>
 
               <Switch
                 value={requireAwakeMonitoring}
-                onValueChange={setRequireAwakeMonitoring}
-                disabled={!canCheckIn || checkinLoading}
+                onValueChange={() => {}}
+                disabled={true}
                 thumbColor={requireAwakeMonitoring ? "#22c55e" : "#f9fafb"}
                 trackColor={{ false: "#4b5563", true: "#16a34a" }}
               />
             </View>
 
             <Row
-              label="Selected for next check-in"
+              label="Controlled by Office"
               value={requireAwakeMonitoring ? "ON" : "OFF"}
             />
 

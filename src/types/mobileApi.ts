@@ -1,4 +1,4 @@
-// src/types/mobileApi.ts
+// bac-Mobile/BlueAngelscareMobile/src/types/mobileApi.ts
 
 export type MobileShiftStatus = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETED";
 
@@ -33,8 +33,14 @@ export interface MobileShift {
   visitEnd?: string | null;
   outcomeText?: string;
 
-  // ✅ Phase 1 - Awake Monitoring
+  // ✅ Office-controlled Awake Monitoring
+  awakeMonitoringRequired?: boolean;
+
+  // ✅ Legacy / runtime compatibility
+  // Có thể vẫn còn được dùng ở vài chỗ cũ, nên tạm giữ để không vỡ app.
   awakeMonitoringEnabled?: boolean;
+
+  // ✅ Runtime info trả về sau check-in / confirm
   awakeMonitoring?: AwakeMonitoringInfo | null;
 }
 
