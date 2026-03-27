@@ -1,5 +1,11 @@
-const BASE_URL = "http://YOUR_BACKEND_URL";
+// ===============================
+// BACKEND URL (PRODUCTION)
+// ===============================
+const BASE_URL = "https://hms.blueangelscare.org";
 
+// ===============================
+// TYPES
+// ===============================
 export type BackupShiftItem = {
   id: string;
   weekId: string;
@@ -28,45 +34,69 @@ type AcceptBackupShiftResponse = {
   shift: any;
 };
 
+// ===============================
+// GET BACKUP SHIFTS
+// ===============================
 export async function getBackupShifts(): Promise<GetBackupShiftsResponse> {
-  const res = await fetch(`${BASE_URL}/api/schedule/backup-open`, {
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
+  try {
+    const res = await fetch(`${BASE_URL}/api/schedule/backup-open`, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
 
-  const data = await res.json();
+    const data = await res.json();
 
-  if (!res.ok) {
+    if (!res.ok) {
+      throw new Error(
+        data?.error || "FAILED_TO_FETCH_BACKUP_OPEN_SHIFTS"
+      );
+    }
+
+    return data;
+  } catch (error: any) {
+    console.log("❌ getBackupShifts error:", error.message);
+
     throw new Error(
-      data?.error || "FAILED_TO_FETCH_BACKUP_OPEN_SHIFTS"
+      error?.message || "NETWORK_ERROR_GET_BACKUP_SHIFTS"
     );
   }
-
-  return data;
 }
 
+// ===============================
+// ACCEPT BACKUP SHIFT
+// ===============================
 export async function acceptBackupShift(
   shiftId: string,
   employeeId: string
 ): Promise<AcceptBackupShiftResponse> {
-  const res = await fetch(`${BASE_URL}/api/schedule/backup-accept`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      shiftId,
-      employeeId,
-    }),
-  });
+  try {
+    const res = await fetch(`${BASE_URL}/api/schedule/backup-accept`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        shiftId,
+        employeeId,
+      }),
+    });
 
-  const data = await res.json();
+    const data = await res.json();
 
-  if (!res.ok) {
-    throw new Error(data?.error || "FAILED_TO_ACCEPT_BACKUP_SHIFT");
+    if (!res.ok) {
+      throw new Error(
+        data?.error || "FAILED_TO_ACCEPT_BACKUP_SHIFT"
+      );
+    }
+
+    return data;
+  } catch (error: any) {
+    console.log("❌ acceptBackupShift error:", error.message);
+
+    throw new Error(
+      error?.message || "NETWORK_ERROR_ACCEPT_BACKUP_SHIFT"
+    );
   }
-
-  return data;
 }
