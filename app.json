@@ -2,7 +2,7 @@
   "expo": {
     "name": "Blue Angels Care Mobile",
     "slug": "blue-angels-care-mobile",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "default",
     "icon": "./assets/bac-logo.png",
     "splash": {
@@ -12,7 +12,7 @@
     },
     "ios": {
       "bundleIdentifier": "org.blueangelscare.mobile",
-      "buildNumber": "26",
+      "buildNumber": "27",
       "supportsTablet": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
@@ -24,7 +24,7 @@
     },
     "android": {
       "package": "org.blueangelscare.mobile",
-      "versionCode": 16,
+      "versionCode": 17,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
