@@ -1,4 +1,5 @@
-// src/screens/HomeScreen.tsx
+// bac-Mobile/BlueAngelscareMobile/src/screens/HomeScreen.tsx
+
 import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
@@ -16,6 +17,14 @@ import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import type { MainDrawerParamList, RootStackParamList } from "../../App";
 import type { MobileShift } from "../types/mobileApi";
 import { getShiftsWindow } from "../api/mobileClient";
+
+// ===== NEW IMPORTS =====
+import BackupShiftAlert from "../components/BackupShiftAlert";
+import {
+  getBackupShifts,
+  acceptBackupShift,
+  type BackupShiftItem,
+} from "../services/backupShiftApi";
 
 /**
  * Return YYYY-MM-DD based on device local time (Pennsylvania)
@@ -108,6 +117,10 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("UPCOMING");
 
+  // ===== NEW STATE =====
+  const [backupShifts, setBackupShifts] = useState<BackupShiftItem[]>([]);
+  const [backupLoading, setBackupLoading] = useState(false);
+
   useFocusEffect(
     useCallback(() => {
       if (!staffId) return;
@@ -132,7 +145,25 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         }
       }
 
+      async function loadBackup() {
+        try {
+          setBackupLoading(true);
+          const data = await getBackupShifts();
+          if (isActive) {
+            setBackupShifts(Array.isArray(data?.items) ? data.items : []);
+          }
+        } catch (e) {
+          console.error("[HomeScreen] load backup shifts error:", e);
+          if (isActive) {
+            setBackupShifts([]);
+          }
+        } finally {
+          if (isActive) setBackupLoading(false);
+        }
+      }
+
       load();
+      loadBackup();
 
       return () => {
         isActive = false;
@@ -209,6 +240,54 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     navigation.openDrawer();
   }
 
+  // ===== NEW HANDLERS =====
+  async function refreshBackupShifts() {
+    try {
+      setBackupLoading(true);
+      const data = await getBackupShifts();
+      setBackupShifts(Array.isArray(data?.items) ? data.items : []);
+    } catch (e) {
+      console.error("[HomeScreen] refresh backup shifts error:", e);
+      setBackupShifts([]);
+    } finally {
+      setBackupLoading(false);
+    }
+  }
+
+  async function handleAcceptBackupShift(shiftId: string) {
+    if (!staffId) {
+      Alert.alert(
+        "Missing staff info",
+        "Cannot accept shift because staff information is missing."
+      );
+      return;
+    }
+
+    try {
+      await acceptBackupShift(shiftId, staffId);
+
+      Alert.alert(
+        "Success",
+        "You have successfully claimed this shift."
+      );
+
+      await refreshBackupShifts();
+    } catch (e: any) {
+      console.error("[HomeScreen] accept backup shift error:", e);
+
+      Alert.alert(
+        "Unavailable",
+        "This shift has already been claimed by another DSP."
+      );
+
+      await refreshBackupShifts();
+    }
+  }
+
+  function handleDismissBackupShift(shiftId: string) {
+    setBackupShifts((prev) => prev.filter((s) => s.id !== shiftId));
+  }
+
   const todayStr = useMemo(() => getLocalDateYYYYMMDD(), [shifts.length]);
 
   const { pastShiftsSorted, upcomingShiftsSorted } = useMemo(() => {
@@ -277,6 +356,25 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         <Text style={styles.highlight}>Past</Text> shifts, plus{" "}
         <Text style={styles.highlight}>Daily Notes</Text>.
       </Text>
+
+      {/* ===== NEW: Backup Shift Alerts ===== */}
+      {backupLoading ? (
+        <View style={styles.backupLoadingBox}>
+          <ActivityIndicator color="#22c55e" />
+          <Text style={styles.backupLoadingText}> Loading backup shift alerts…</Text>
+        </View>
+      ) : backupShifts.length > 0 ? (
+        <View style={styles.backupAlertsBox}>
+          {backupShifts.map((shift) => (
+            <BackupShiftAlert
+              key={shift.id}
+              shift={shift}
+              onAccept={handleAcceptBackupShift}
+              onDismiss={() => handleDismissBackupShift(shift.id)}
+            />
+          ))}
+        </View>
+      ) : null}
 
       <View style={styles.summaryBox}>
         {loading ? (
@@ -487,6 +585,29 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#e5e7eb",
   },
+
+  // ===== NEW =====
+  backupAlertsBox: {
+    width: "100%",
+    marginBottom: 16,
+  },
+  backupLoadingBox: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#1f2937",
+    backgroundColor: "#020617",
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 16,
+  },
+  backupLoadingText: {
+    color: "#e5e7eb",
+    fontSize: 14,
+  },
+
   summaryBox: {
     width: "100%",
     backgroundColor: "#020617",
