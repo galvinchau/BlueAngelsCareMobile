@@ -18,13 +18,21 @@ import type { MainDrawerParamList, RootStackParamList } from "../../App";
 import type { MobileShift } from "../types/mobileApi";
 import { getShiftsWindow } from "../api/mobileClient";
 
-// ===== NEW IMPORTS =====
+// ===== EXISTING BACKUP SHIFT IMPORTS =====
 import BackupShiftAlert from "../components/BackupShiftAlert";
 import {
   getBackupShifts,
   acceptBackupShift,
   type BackupShiftItem,
 } from "../services/backupShiftApi";
+
+// ===== NEW CANCEL ALERT IMPORTS =====
+import CancelShiftAlert from "../components/CancelShiftAlert";
+import {
+  getCancelShiftAlerts,
+  dismissCancelShiftAlert,
+  type CancelShiftAlertItem,
+} from "../services/cancelShiftAlertApi";
 
 /**
  * Return YYYY-MM-DD based on device local time (Pennsylvania)
@@ -117,9 +125,13 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<TabKey>("UPCOMING");
 
-  // ===== NEW STATE =====
+  // ===== EXISTING BACKUP STATE =====
   const [backupShifts, setBackupShifts] = useState<BackupShiftItem[]>([]);
   const [backupLoading, setBackupLoading] = useState(false);
+
+  // ===== NEW CANCEL ALERT STATE =====
+  const [cancelAlerts, setCancelAlerts] = useState<CancelShiftAlertItem[]>([]);
+  const [cancelAlertsLoading, setCancelAlertsLoading] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -162,8 +174,26 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         }
       }
 
+      async function loadCancelAlerts() {
+        try {
+          setCancelAlertsLoading(true);
+          const data = await getCancelShiftAlerts(staffId);
+          if (isActive) {
+            setCancelAlerts(Array.isArray(data?.items) ? data.items : []);
+          }
+        } catch (e) {
+          console.error("[HomeScreen] load cancel alerts error:", e);
+          if (isActive) {
+            setCancelAlerts([]);
+          }
+        } finally {
+          if (isActive) setCancelAlertsLoading(false);
+        }
+      }
+
       load();
       loadBackup();
+      loadCancelAlerts();
 
       return () => {
         isActive = false;
@@ -240,7 +270,7 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     navigation.openDrawer();
   }
 
-  // ===== NEW HANDLERS =====
+  // ===== EXISTING BACKUP HANDLERS =====
   async function refreshBackupShifts() {
     try {
       setBackupLoading(true);
@@ -266,10 +296,7 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
     try {
       await acceptBackupShift(shiftId, staffId);
 
-      Alert.alert(
-        "Success",
-        "You have successfully claimed this shift."
-      );
+      Alert.alert("Success", "You have successfully claimed this shift.");
 
       await refreshBackupShifts();
     } catch (e: any) {
@@ -286,6 +313,20 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
 
   function handleDismissBackupShift(shiftId: string) {
     setBackupShifts((prev) => prev.filter((s) => s.id !== shiftId));
+  }
+
+  // ===== NEW CANCEL ALERT HANDLERS =====
+  async function handleDismissCancelAlert(alertId: string) {
+    try {
+      await dismissCancelShiftAlert(alertId);
+      setCancelAlerts((prev) => prev.filter((a) => a.id !== alertId));
+    } catch (e) {
+      console.error("[HomeScreen] dismiss cancel alert error:", e);
+      Alert.alert(
+        "Error",
+        "Could not dismiss this alert right now. Please try again."
+      );
+    }
   }
 
   const todayStr = useMemo(() => getLocalDateYYYYMMDD(), [shifts.length]);
@@ -357,7 +398,25 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
         <Text style={styles.highlight}>Daily Notes</Text>.
       </Text>
 
-      {/* ===== NEW: Backup Shift Alerts ===== */}
+      {/* ===== NEW: Cancel Shift Alerts ===== */}
+      {cancelAlertsLoading ? (
+        <View style={styles.cancelLoadingBox}>
+          <ActivityIndicator color="#ffffff" />
+          <Text style={styles.cancelLoadingText}> Loading cancellation alerts…</Text>
+        </View>
+      ) : cancelAlerts.length > 0 ? (
+        <View style={styles.cancelAlertsBox}>
+          {cancelAlerts.map((item) => (
+            <CancelShiftAlert
+              key={item.id}
+              alert={item}
+              onDismiss={() => handleDismissCancelAlert(item.id)}
+            />
+          ))}
+        </View>
+      ) : null}
+
+      {/* ===== EXISTING: Backup Shift Alerts ===== */}
       {backupLoading ? (
         <View style={styles.backupLoadingBox}>
           <ActivityIndicator color="#22c55e" />
@@ -586,7 +645,30 @@ const styles = StyleSheet.create({
     color: "#e5e7eb",
   },
 
-  // ===== NEW =====
+  // ===== NEW CANCEL ALERT =====
+  cancelAlertsBox: {
+    width: "100%",
+    marginBottom: 16,
+  },
+  cancelLoadingBox: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#7f1d1d",
+    backgroundColor: "#991b1b",
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 16,
+  },
+  cancelLoadingText: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  // ===== EXISTING BACKUP =====
   backupAlertsBox: {
     width: "100%",
     marginBottom: 16,
