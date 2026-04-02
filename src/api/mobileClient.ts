@@ -4,6 +4,11 @@ import type {
   MobileLoginResult,
   MobileDailyNotePayload,
   CheckInOutResponse,
+  RegisterPushTokenPayload,
+  RegisterPushTokenResponse,
+  DeactivatePushTokenPayload,
+  DeactivatePushTokenResponse,
+  SendTestPushResponse,
 } from "../types/mobileApi";
 
 import { BACKEND_BASE_URL } from "../config";
@@ -376,4 +381,80 @@ export async function searchIndividuals(
   }
 
   throw lastErr || new Error("searchIndividuals failed: no endpoint matched");
+}
+
+// =======================
+// 🔔 PUSH NOTIFICATIONS
+// =======================
+
+/**
+ * Register Expo push token on backend
+ */
+export async function registerPushToken(
+  payload: RegisterPushTokenPayload
+): Promise<RegisterPushTokenResponse> {
+  const url = `${BACKEND_BASE_URL}/mobile/push/register-token`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await readBodySafe(res);
+    throw new Error(
+      `registerPushToken failed (${res.status}): ${body || res.statusText}`
+    );
+  }
+
+  return res.json();
+}
+
+/**
+ * Deactivate Expo push token
+ */
+export async function deactivatePushToken(
+  payload: DeactivatePushTokenPayload
+): Promise<DeactivatePushTokenResponse> {
+  const url = `${BACKEND_BASE_URL}/mobile/push/deactivate-token`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const body = await readBodySafe(res);
+    throw new Error(
+      `deactivatePushToken failed (${res.status}): ${body || res.statusText}`
+    );
+  }
+
+  return res.json();
+}
+
+/**
+ * Send test push (for debugging)
+ */
+export async function sendTestPush(
+  staffId: string
+): Promise<SendTestPushResponse> {
+  const url = `${BACKEND_BASE_URL}/mobile/push/test`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ staffId }),
+  });
+
+  if (!res.ok) {
+    const body = await readBodySafe(res);
+    throw new Error(
+      `sendTestPush failed (${res.status}): ${body || res.statusText}`
+    );
+  }
+
+  return res.json();
 }

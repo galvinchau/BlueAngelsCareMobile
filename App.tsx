@@ -1,5 +1,5 @@
 // App.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   StyleSheet,
   View,
@@ -7,6 +7,7 @@ import {
   Text,
   ActivityIndicator,
   Alert,
+  Platform,
 } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import {
@@ -20,6 +21,9 @@ import {
 
 import * as SecureStore from "expo-secure-store";
 import * as LocalAuthentication from "expo-local-authentication";
+import * as Notifications from "expo-notifications";
+import * as Device from "expo-device";
+import Constants from "expo-constants";
 
 import LoginScreen from "./src/screens/LoginScreen";
 import HomeScreen from "./src/screens/HomeScreen";
@@ -38,6 +42,19 @@ import HealthIncidentScreen from "./src/screens/HealthIncidentScreen";
 // auto-login helpers
 import { getRefreshToken } from "./src/auth/authStorage";
 import { refreshLogin } from "./src/api/mobileAuthApi";
+import { registerPushToken as registerPushTokenApi } from "./src/api/mobileClient";
+
+// =======================
+// Expo Notifications handler
+// =======================
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldPlaySound: true,
+    shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 // =======================
 // Root Stack types
@@ -129,6 +146,68 @@ type MainDrawerNavProps = NativeStackScreenProps<RootStackParamList, "Main">;
 // =======================
 const BIOMETRIC_ENABLED_KEY = "BAC_BIOMETRIC_LOGIN_ENABLED";
 
+// =======================
+// Push helpers
+// =======================
+function getExpoProjectId(): string | null {
+  const fromEasConfig = (Constants as any)?.easConfig?.projectId;
+  const fromExpoConfig = (Constants as any)?.expoConfig?.extra?.eas?.projectId;
+  const value = String(fromEasConfig || fromExpoConfig || "").trim();
+  return value || null;
+}
+
+async function registerForPushNotificationsAsync(): Promise<{
+  expoPushToken: string;
+  platform?: string;
+  appVersion?: string;
+} | null> {
+  try {
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("default", {
+        name: "default",
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 300, 200, 300],
+        sound: "default",
+      });
+    }
+
+    if (!Device.isDevice) {
+      console.log("[Push] Physical device required for remote push token.");
+      return null;
+    }
+
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+
+    if (existingStatus !== "granted") {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+
+    if (finalStatus !== "granted") {
+      console.log("[Push] Permission not granted.");
+      return null;
+    }
+
+    const projectId = getExpoProjectId();
+    if (!projectId) {
+      console.log("[Push] Missing Expo projectId.");
+      return null;
+    }
+
+    const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+
+    return {
+      expoPushToken: token,
+      platform: Platform.OS,
+      appVersion: (Constants.expoConfig as any)?.version || undefined,
+    };
+  } catch (e: any) {
+    console.log("[Push] registerForPushNotificationsAsync failed:", String(e?.message || e));
+    return null;
+  }
+}
+
 // Hamburger button
 function DrawerHamburger({ onPress }: { onPress: () => void }) {
   return (
@@ -186,6 +265,47 @@ function ClientsStackNavigator() {
 // =======================
 function MainDrawerNavigator({ route }: MainDrawerNavProps) {
   const { staffId, staffName, staffEmail } = route.params || {};
+  const lastRegisteredPushKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function syncPushTokenForStaff() {
+      if (!staffId) return;
+
+      const tokenInfo = await registerForPushNotificationsAsync();
+      if (!tokenInfo?.expoPushToken || cancelled) return;
+
+      const registrationKey = `${staffId}:${tokenInfo.expoPushToken}`;
+      if (lastRegisteredPushKeyRef.current === registrationKey) {
+        return;
+      }
+
+      try {
+        await registerPushTokenApi({
+          staffId,
+          expoPushToken: tokenInfo.expoPushToken,
+          platform: tokenInfo.platform,
+          appVersion: tokenInfo.appVersion,
+        });
+
+        lastRegisteredPushKeyRef.current = registrationKey;
+
+        console.log("[Push] Token registered for staff:", staffId);
+      } catch (e: any) {
+        console.log(
+          "[Push] Failed to register token with backend:",
+          String(e?.message || e)
+        );
+      }
+    }
+
+    syncPushTokenForStaff();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [staffId]);
 
   return (
     <Drawer.Navigator
@@ -316,6 +436,32 @@ export default function App() {
   const [initialParams, setInitialParams] = useState<
     RootStackParamList["Main"] | undefined
   >(undefined);
+
+  const notificationListener = useRef<Notifications.EventSubscription | null>(null);
+  const responseListener = useRef<Notifications.EventSubscription | null>(null);
+
+  useEffect(() => {
+    notificationListener.current =
+      Notifications.addNotificationReceivedListener((notification) => {
+        console.log(
+          "[Push] Notification received:",
+          notification.request.content.data
+        );
+      });
+
+    responseListener.current =
+      Notifications.addNotificationResponseReceivedListener((response) => {
+        console.log(
+          "[Push] Notification tapped:",
+          response.notification.request.content.data
+        );
+      });
+
+    return () => {
+      notificationListener.current?.remove();
+      responseListener.current?.remove();
+    };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
