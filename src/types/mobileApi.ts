@@ -38,6 +38,7 @@ export interface MobileShift {
   visitStart?: string | null;
   visitEnd?: string | null;
   outcomeText?: string;
+  isNoteSubmitted?: boolean;
 
   // Office-controlled Awake Monitoring
   awakeMonitoringRequired?: boolean;

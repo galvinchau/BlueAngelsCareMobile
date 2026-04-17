@@ -117,6 +117,21 @@ function isShiftActiveOrOpen(shift: MobileShift): boolean {
   return shift.status === "IN_PROGRESS" || (!!shift.visitStart && !shift.visitEnd);
 }
 
+/**
+ * Safe reader for Daily Note submit status.
+ * This keeps the mobile UI backward-compatible even if backend field names vary.
+ */
+function isDailyNoteSubmitted(shift: MobileShift): boolean {
+  const s = shift as any;
+
+  return Boolean(
+    s?.isNoteSubmitted ??
+      s?.dailyNoteSubmitted ??
+      s?.dailyNoteCompleted ??
+      false
+  );
+}
+
 export default function HomeScreen({ route, navigation }: HomeScreenProps) {
   const { staffId, staffName, staffEmail } = route.params || {};
 
@@ -536,27 +551,41 @@ export default function HomeScreen({ route, navigation }: HomeScreenProps) {
                     </Text>
                   </View>
 
-                  {g.items.map((s) => (
-                    <TouchableOpacity
-                      key={s.id}
-                      style={styles.shiftRow}
-                      onPress={() => openShift(s.id)}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.shiftTitle}>
-                          {s.individualName ?? "Individual"} •{" "}
-                          {s.serviceName ?? "Service"}
-                        </Text>
-                        <Text style={styles.shiftSub}>
-                          {s.scheduleStart} – {s.scheduleEnd}
-                        </Text>
-                        {isShiftActiveOrOpen(s) ? (
-                          <Text style={styles.activeBadge}>Active / Open</Text>
-                        ) : null}
-                      </View>
-                      <Text style={styles.shiftAction}>Open</Text>
-                    </TouchableOpacity>
-                  ))}
+                  {g.items.map((s) => {
+                    const submitted = isDailyNoteSubmitted(s);
+
+                    return (
+                      <TouchableOpacity
+                        key={s.id}
+                        style={styles.shiftRow}
+                        onPress={() => openShift(s.id)}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.shiftTitle}>
+                            {s.individualName ?? "Individual"} •{" "}
+                            {s.serviceName ?? "Service"}
+                          </Text>
+                          <Text style={styles.shiftSub}>
+                            {s.scheduleStart} – {s.scheduleEnd}
+                          </Text>
+
+                          {isShiftActiveOrOpen(s) ? (
+                            <Text style={styles.activeBadge}>Active / Open</Text>
+                          ) : tab === "PAST" ? (
+                            submitted ? (
+                              <Text style={styles.submittedBadge}>✓ Submitted</Text>
+                            ) : (
+                              <Text style={styles.notSubmittedBadge}>
+                                🚨 Not yet submitted
+                              </Text>
+                            )
+                          ) : null}
+                        </View>
+
+                        <Text style={styles.shiftAction}>Open</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               ))}
             </View>
@@ -798,6 +827,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "800",
     color: "#22c55e",
+  },
+  submittedBadge: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#22c55e",
+  },
+  notSubmittedBadge: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#ef4444",
   },
   shiftAction: {
     color: "#93c5fd",
