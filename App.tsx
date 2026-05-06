@@ -33,20 +33,22 @@ import ClientDetailScreen from "./src/screens/ClientDetailScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import HelpScreen from "./src/screens/HelpScreen";
 
-// ✅ NEW: Visit Tabs screen
 import VisitTabsScreen from "./src/screens/VisitTabsScreen";
-
-// ✅ NEW: Health & Incident screen
 import HealthIncidentScreen from "./src/screens/HealthIncidentScreen";
 
-// auto-login helpers
-import { getRefreshToken } from "./src/auth/authStorage";
+import {
+  getRefreshToken,
+  getStaffInfo,
+} from "./src/auth/authStorage";
 import { refreshLogin } from "./src/api/mobileAuthApi";
-import { registerPushToken as registerPushTokenApi } from "./src/api/mobileClient";
+import {
+  registerPushToken as registerPushTokenApi,
+  confirmAwake,
+} from "./src/api/mobileClient";
 
-// =======================
-// Expo Notifications handler
-// =======================
+const AWAKE_CATEGORY_ID = "AWAKE_MONITORING";
+const AWAKE_CONFIRM_ACTION_ID = "AWAKE_CONFIRM";
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldPlaySound: true,
@@ -56,9 +58,6 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// =======================
-// Root Stack types
-// =======================
 export type RootStackParamList = {
   Login: undefined;
   Main:
@@ -70,9 +69,6 @@ export type RootStackParamList = {
     | undefined;
 };
 
-// =======================
-// Drawer types
-// =======================
 export type MainDrawerParamList = {
   Visits:
     | {
@@ -81,10 +77,7 @@ export type MainDrawerParamList = {
         staffEmail?: string;
       }
     | undefined;
-
   Clients: undefined;
-
-  // ✅ NEW: Health & Incident
   HealthIncident:
     | {
         staffId?: string;
@@ -92,7 +85,6 @@ export type MainDrawerParamList = {
         staffEmail?: string;
       }
     | undefined;
-
   DailyNote:
     | {
         shiftId?: string;
@@ -101,26 +93,20 @@ export type MainDrawerParamList = {
         staffEmail?: string;
       }
     | undefined;
-
-  // ✅ NEW: Open Shift -> Tabs
   VisitTabs:
     | {
         shiftId?: string;
-        shift?: any; // MobileShift (kept as any to avoid cross-import in App.tsx)
+        shift?: any;
         staffId?: string;
         staffName?: string;
         staffEmail?: string;
         initialTab?: "CHECK" | "MEDICATION" | "POC" | "DAILY_NOTE";
       }
     | undefined;
-
   Settings: undefined;
   Help: undefined;
 };
 
-// =======================
-// Clients Stack types
-// =======================
 export type ClientsStackParamList = {
   ClientsList: undefined;
   ClientDetail: {
@@ -141,14 +127,8 @@ const ClientsStack = createNativeStackNavigator<ClientsStackParamList>();
 
 type MainDrawerNavProps = NativeStackScreenProps<RootStackParamList, "Main">;
 
-// =======================
-// Biometric setting key (must match SettingsScreen.tsx)
-// =======================
 const BIOMETRIC_ENABLED_KEY = "BAC_BIOMETRIC_LOGIN_ENABLED";
 
-// =======================
-// Push helpers
-// =======================
 function getExpoProjectId(): string | null {
   const fromEasConfig = (Constants as any)?.easConfig?.projectId;
   const fromExpoConfig = (Constants as any)?.expoConfig?.extra?.eas?.projectId;
@@ -156,11 +136,7 @@ function getExpoProjectId(): string | null {
   return value || null;
 }
 
-async function registerForPushNotificationsAsync(): Promise<{
-  expoPushToken: string;
-  platform?: string;
-  appVersion?: string;
-} | null> {
+async function setupNotificationActionsAsync() {
   try {
     if (Platform.OS === "android") {
       await Notifications.setNotificationChannelAsync("default", {
@@ -170,6 +146,33 @@ async function registerForPushNotificationsAsync(): Promise<{
         sound: "default",
       });
     }
+
+    await Notifications.setNotificationCategoryAsync(AWAKE_CATEGORY_ID, [
+      {
+        identifier: AWAKE_CONFIRM_ACTION_ID,
+        buttonTitle: "I am Awake",
+        options: {
+          opensAppToForeground: false,
+        },
+      },
+    ]);
+
+    console.log("[Push] Awake notification action registered.");
+  } catch (e: any) {
+    console.log(
+      "[Push] setupNotificationActionsAsync failed:",
+      String(e?.message || e)
+    );
+  }
+}
+
+async function registerForPushNotificationsAsync(): Promise<{
+  expoPushToken: string;
+  platform?: string;
+  appVersion?: string;
+} | null> {
+  try {
+    await setupNotificationActionsAsync();
 
     if (!Device.isDevice) {
       console.log("[Push] Physical device required for remote push token.");
@@ -203,12 +206,84 @@ async function registerForPushNotificationsAsync(): Promise<{
       appVersion: (Constants.expoConfig as any)?.version || undefined,
     };
   } catch (e: any) {
-    console.log("[Push] registerForPushNotificationsAsync failed:", String(e?.message || e));
+    console.log(
+      "[Push] registerForPushNotificationsAsync failed:",
+      String(e?.message || e)
+    );
     return null;
   }
 }
 
-// Hamburger button
+async function showLocalNotification(title: string, body: string) {
+  try {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        sound: "default",
+      },
+      trigger: null,
+    });
+  } catch {
+    // ignore
+  }
+}
+
+async function handleAwakeNotificationAction(data: any) {
+  const visitId = String(data?.visitId || "").trim();
+
+  if (!visitId) {
+    await showLocalNotification(
+      "Awake confirmation failed",
+      "Missing visit information. Please open the app and confirm awake."
+    );
+    return;
+  }
+
+  let staffId = String(data?.staffId || data?.dspId || "").trim();
+
+  if (!staffId) {
+    try {
+      const staff = await getStaffInfo();
+      staffId = String(staff?.staffId || "").trim();
+    } catch {
+      staffId = "";
+    }
+  }
+
+  if (!staffId) {
+    await showLocalNotification(
+      "Awake confirmation failed",
+      "Missing staff information. Please open the app and confirm awake."
+    );
+    return;
+  }
+
+  try {
+    await confirmAwake(visitId, staffId);
+
+    await showLocalNotification(
+      "Awake confirmed",
+      "Thank you. Your Awake confirmation was recorded."
+    );
+
+    console.log("[Push] Awake confirmed from notification action:", {
+      visitId,
+      staffId,
+    });
+  } catch (e: any) {
+    console.log(
+      "[Push] Awake action confirm failed:",
+      String(e?.message || e)
+    );
+
+    await showLocalNotification(
+      "Awake confirmation failed",
+      "Please open the app and confirm awake again."
+    );
+  }
+}
+
 function DrawerHamburger({ onPress }: { onPress: () => void }) {
   return (
     <Pressable
@@ -224,9 +299,6 @@ function DrawerHamburger({ onPress }: { onPress: () => void }) {
   );
 }
 
-// =======================
-// Clients Stack inside Drawer
-// =======================
 function ClientsStackNavigator() {
   return (
     <ClientsStack.Navigator>
@@ -260,9 +332,6 @@ function ClientsStackNavigator() {
   );
 }
 
-// =======================
-// Drawer after login
-// =======================
 function MainDrawerNavigator({ route }: MainDrawerNavProps) {
   const { staffId, staffName, staffEmail } = route.params || {};
   const lastRegisteredPushKeyRef = useRef<string>("");
@@ -330,7 +399,6 @@ function MainDrawerNavigator({ route }: MainDrawerNavProps) {
         initialParams={{ staffId, staffName, staffEmail }}
       />
 
-      {/* Keep existing Daily Note in menu (no change) */}
       <Drawer.Screen
         name="DailyNote"
         component={DailyNoteScreen}
@@ -338,7 +406,6 @@ function MainDrawerNavigator({ route }: MainDrawerNavProps) {
         initialParams={{ staffId, staffName, staffEmail }}
       />
 
-      {/* ✅ NEW: Tabs screen (Open Shift) */}
       <Drawer.Screen
         name="VisitTabs"
         component={VisitTabsScreen}
@@ -346,14 +413,12 @@ function MainDrawerNavigator({ route }: MainDrawerNavProps) {
         initialParams={{ staffId, staffName, staffEmail }}
       />
 
-      {/* IMPORTANT: hide Drawer header for Clients, because ClientsStack manages its own header (back button). */}
       <Drawer.Screen
         name="Clients"
         component={ClientsStackNavigator}
         options={{ headerShown: false, title: "Clients" }}
       />
 
-      {/* ✅ NEW: Health & Incident under Clients */}
       <Drawer.Screen
         name="HealthIncident"
         component={HealthIncidentScreen}
@@ -376,9 +441,6 @@ function MainDrawerNavigator({ route }: MainDrawerNavProps) {
   );
 }
 
-// =======================
-// Biometric helpers
-// =======================
 async function isBiometricEnabledByUser(): Promise<boolean> {
   try {
     const raw = await SecureStore.getItemAsync(BIOMETRIC_ENABLED_KEY);
@@ -403,13 +465,11 @@ async function canUseBiometric(): Promise<boolean> {
 }
 
 async function promptBiometricIfEnabled(): Promise<boolean> {
-  // Only require biometric if user enabled it in Settings
   const enabled = await isBiometricEnabledByUser();
   if (!enabled) return true;
 
   const usable = await canUseBiometric();
   if (!usable) {
-    // User enabled biometric but device cannot do it => allow login, and notify
     Alert.alert(
       "Biometric unavailable",
       "Biometric Login is enabled, but this device does not have Face ID/Touch ID set up. Please configure it in iPhone Settings or disable Biometric Login in the app Settings."
@@ -427,9 +487,6 @@ async function promptBiometricIfEnabled(): Promise<boolean> {
   return !!result.success;
 }
 
-// =======================
-// Root App
-// =======================
 export default function App() {
   const [booting, setBooting] = useState(true);
   const [initialRoute, setInitialRoute] = useState<"Login" | "Main">("Login");
@@ -439,8 +496,11 @@ export default function App() {
 
   const notificationListener = useRef<Notifications.EventSubscription | null>(null);
   const responseListener = useRef<Notifications.EventSubscription | null>(null);
+  const processedActionIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    setupNotificationActionsAsync();
+
     notificationListener.current =
       Notifications.addNotificationReceivedListener((notification) => {
         console.log(
@@ -451,10 +511,25 @@ export default function App() {
 
     responseListener.current =
       Notifications.addNotificationResponseReceivedListener((response) => {
-        console.log(
-          "[Push] Notification tapped:",
-          response.notification.request.content.data
-        );
+        const data = response.notification.request.content.data || {};
+        const actionIdentifier = response.actionIdentifier;
+
+        console.log("[Push] Notification response:", {
+          actionIdentifier,
+          data,
+        });
+
+        if (actionIdentifier === AWAKE_CONFIRM_ACTION_ID) {
+          const visitId = String((data as any)?.visitId || "").trim();
+          const uniqueKey = `${AWAKE_CONFIRM_ACTION_ID}:${visitId || Date.now()}`;
+
+          if (processedActionIdsRef.current.has(uniqueKey)) {
+            return;
+          }
+
+          processedActionIdsRef.current.add(uniqueKey);
+          handleAwakeNotificationAction(data);
+        }
       });
 
     return () => {
@@ -477,17 +552,14 @@ export default function App() {
           return;
         }
 
-        // ✅ Gate with FaceID ONLY if user enabled Biometric Login
         const ok = await promptBiometricIfEnabled();
         if (!ok) {
           if (!mounted) return;
-          // user canceled/failed -> go to Login (do not clear token)
           setInitialRoute("Login");
           setInitialParams(undefined);
           return;
         }
 
-        // try refresh
         const data = await refreshLogin(token);
 
         if (!mounted) return;
@@ -499,7 +571,6 @@ export default function App() {
         });
       } catch (e: any) {
         if (!mounted) return;
-        // refresh failed -> force login with OTP
         setInitialRoute("Login");
         setInitialParams(undefined);
 
